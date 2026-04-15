@@ -440,19 +440,21 @@ const COLORS = {
 // --- Input state ---
 const keys = {};
 const mouse = { x: GAME_W / 2, y: GAME_H / 2, down: false, clicked: false };
+const TOUCH_LEFT_BASE = { x: 132, y: GAME_H - 120 };
+const TOUCH_RIGHT_BASE = { x: GAME_W - 170, y: GAME_H - 130 };
 const touchState = {
   leftId: null,
   rightId: null,
   moveX: 0,
   moveY: 0,
-  leftBaseX: 132,
-  leftBaseY: GAME_H - 120,
-  leftStickX: 132,
-  leftStickY: GAME_H - 120,
-  rightBaseX: GAME_W - 170,
-  rightBaseY: GAME_H - 130,
-  rightStickX: GAME_W - 170,
-  rightStickY: GAME_H - 130,
+  leftBaseX: TOUCH_LEFT_BASE.x,
+  leftBaseY: TOUCH_LEFT_BASE.y,
+  leftStickX: TOUCH_LEFT_BASE.x,
+  leftStickY: TOUCH_LEFT_BASE.y,
+  rightBaseX: TOUCH_RIGHT_BASE.x,
+  rightBaseY: TOUCH_RIGHT_BASE.y,
+  rightStickX: TOUCH_RIGHT_BASE.x,
+  rightStickY: TOUCH_RIGHT_BASE.y,
   aimX: 1,
   aimY: 0,
   rightX: GAME_W - 170,
@@ -565,12 +567,16 @@ function resetTouchJoystick() {
   touchState.leftId = null;
   touchState.moveX = 0;
   touchState.moveY = 0;
+  touchState.leftBaseX = TOUCH_LEFT_BASE.x;
+  touchState.leftBaseY = TOUCH_LEFT_BASE.y;
   touchState.leftStickX = touchState.leftBaseX;
   touchState.leftStickY = touchState.leftBaseY;
 }
 
 function resetTouchAim() {
   touchState.rightId = null;
+  touchState.rightBaseX = TOUCH_RIGHT_BASE.x;
+  touchState.rightBaseY = TOUCH_RIGHT_BASE.y;
   touchState.rightStickX = touchState.rightBaseX;
   touchState.rightStickY = touchState.rightBaseY;
   touchState.shootDown = false;
@@ -647,10 +653,10 @@ function handleGameplayTouchStart(touch) {
   }
   if (touchState.rightId === null) {
     touchState.rightId = touch.identifier;
-    touchState.rightBaseX = point.x;
-    touchState.rightBaseY = point.y;
-    touchState.rightStickX = point.x;
-    touchState.rightStickY = point.y;
+    touchState.rightBaseX = TOUCH_RIGHT_BASE.x;
+    touchState.rightBaseY = TOUCH_RIGHT_BASE.y;
+    touchState.rightStickX = touchState.rightBaseX;
+    touchState.rightStickY = touchState.rightBaseY;
     updateTouchAim(point, true);
   }
 }
