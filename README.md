@@ -3,8 +3,8 @@
 > **A 2D top-down shooter about fighting back against war profiteers and central bankers.**  
 > Bitcoin & Lightning Network are the resistance monetary system.
 
-![Version](https://img.shields.io/badge/version-v0.1.4-blue)
-![Size](https://img.shields.io/badge/size-%7E5000%20lines-orange)
+![Version](https://img.shields.io/badge/version-v0.1.8-blue)
+![Size](https://img.shields.io/badge/size-%7E7000%20lines-orange)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-green)
 ![Browser](https://img.shields.io/badge/browser-any%20modern-purple)
 
@@ -320,20 +320,18 @@ freedom-game/
 | v0.1.2 | 5 unique bosses with distinct visuals & attacks | — |
 | v0.1.3 | Talent tree system (3 branches, 15 talents) | — |
 | v0.1.4 | 5 new enemies + The System boss (Wave 30) | — |
-| **Total** | | **~5,000 lines** |
+| v0.1.5 | QoL polish: animated start screen, tutorial hints, late-game perf | — |
+| v0.1.6 | Arctic & Jungle biomes, Flamethrower & Railgun weapons | — |
+| v0.1.7 | Elite enemies (shielded, explosive, teleporting), minibosses | — |
+| v0.1.8 | Meta expansion: 3rd tier talents, prestige system, weapon mastery | — |
+| **Total** | | **~7,000 lines** |
 
 ---
 
-## 🗺 Roadmap to v0.2.0
+## 🗺 Roadmap
 
-| Version | Planned Features |
-|---------|-----------------|
-| v0.1.5 | Start screen polish, sounds, tutorial hints |
-| v0.1.6 | Arctic & Jungle biomes, Flamethrower & Railgun |
-| v0.1.7 | Elite enemies, minibosses every 3 waves |
-| v0.1.8 | Expanded talent tree, achievement rewards |
-| v0.1.9 | Final balance, all achievements, accessibility |
-| **v0.2.0** | **Release** |
+Currently on **v0.1.8** — working toward **v0.1.9 (Final Polish)** and **v0.2.0 (Release)**.
+Upcoming: Lightning Network payout integration, local co-op, and mod support.
 
 ---
 
