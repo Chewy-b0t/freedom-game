@@ -1104,7 +1104,7 @@ class Player {
         break;
 
       case 'shotgun':
-        if (this.weaponAmmo.shotgun <= 0) { this.weapons = ['pistol']; this.currentWeapon = 0; return; }
+        if (this.weaponAmmo.shotgun <= 0) { this.currentWeapon = this.weapons.indexOf('pistol') !== -1 ? this.weapons.indexOf('pistol') : 0; return; }
         this.weaponAmmo.shotgun--;
         this.fireRate = 350;
         const pellets = 7;
@@ -1132,7 +1132,7 @@ class Player {
         break;
 
       case 'homing':
-        if (this.weaponAmmo.homing <= 0) { this.weapons = ['pistol']; this.currentWeapon = 0; return; }
+        if (this.weaponAmmo.homing <= 0) { this.currentWeapon = this.weapons.indexOf('pistol') !== -1 ? this.weapons.indexOf('pistol') : 0; return; }
         this.weaponAmmo.homing--;
         this.fireRate = 500;
         // Find nearest enemy
@@ -1167,7 +1167,7 @@ class Player {
         break;
 
       case 'flamethrower':
-        if (this.weaponAmmo.flamethrower <= 0) { this.weapons = ['pistol']; this.currentWeapon = 0; return; }
+        if (this.weaponAmmo.flamethrower <= 0) { this.currentWeapon = this.weapons.indexOf('pistol') !== -1 ? this.weapons.indexOf('pistol') : 0; return; }
         this.weaponAmmo.flamethrower--;
         this.fireRate = 80;
         // Cone of fire - multiple bullets in a spread
@@ -1216,7 +1216,7 @@ class Player {
     
     // Only fire if charged enough
     if (charge < 200) { this.railChargeTime = 0; return; }
-    if (this.weaponAmmo.railgun <= 0) { this.railChargeTime = 0; this.weapons = ['pistol']; this.currentWeapon = 0; return; }
+    if (this.weaponAmmo.railgun <= 0) { this.railChargeTime = 0; this.currentWeapon = this.weapons.indexOf('pistol') !== -1 ? this.weapons.indexOf('pistol') : 0; return; }
     
     this.weaponAmmo.railgun--;
     this.railChargeTime = 0;
