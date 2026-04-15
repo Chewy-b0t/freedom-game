@@ -1,6 +1,6 @@
 <div align="center">
 
-![Freedom Fighters vs War Mongers](icon.svg)
+![Freedom Fighters vs War Mongers](assets/icons/icon.svg)
 
 # 🎮 Freedom Fighters vs War Mongers
 
@@ -142,13 +142,15 @@ http://<your-lan-ip>:8080
 
 ```
 freedom-game/
-├── index.html          # 🎮 The entire game — no build step needed
-├── dev.py              # 🔧 Dev server with live reload & LAN support
-├── manifest.webmanifest# 📱 PWA manifest for installable shell
-├── sw.js               # ⚙️ Service worker for offline/PWA support
-├── icon-192.png        # 🖼️ PWA icon (192x192)
-├── icon-512.png        # 🖼️ PWA icon (512x512)
-└── icon.svg            # 🎨 Source vector icon
+├── index.html              # 🎮 The entire game — no build step needed
+├── dev.py                  # 🔧 Dev server with live reload & LAN support
+├── assets/
+│   └── icons/              # 📱 PWA & icon assets
+│       ├── icon.svg        # 🎨 Source vector icon
+│       ├── icon-192.png    # 🖼️ PWA icon (192x192)
+│       ├── icon-512.png    # 🖼️ PWA icon (512x512)
+│       ├── manifest.webmanifest  # 📱 PWA manifest for installable shell
+│       └── sw.js           # ⚙️ Service worker for offline/PWA support
 ```
 
 **Design Principles:**

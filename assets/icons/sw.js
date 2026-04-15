@@ -1,7 +1,7 @@
-const CACHE_NAME = 'freedom-fighters-v0-1-9-pwa-2';
+const CACHE_NAME = 'freedom-fighters-v0-1-9-pwa-3';
 const CORE_ASSETS = [
-  './',
-  './index.html',
+  '../../',
+  '../../index.html',
   './manifest.webmanifest',
   './icon.svg',
   './icon-192.png',
@@ -42,7 +42,7 @@ self.addEventListener('fetch', event => {
           caches.open(CACHE_NAME).then(cache => cache.put(event.request, responseClone));
           return response;
         })
-        .catch(() => cached || caches.match('./index.html'));
+        .catch(() => cached || caches.match('../../index.html'));
 
       return cached || networkFetch;
     })

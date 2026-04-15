@@ -7,9 +7,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Freedom Fighters">
-<link rel="manifest" href="./manifest.webmanifest">
-<link rel="icon" href="./icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="./icon-192.png">
+<link rel="manifest" href="./assets/icons/manifest.webmanifest">
+<link rel="icon" href="./assets/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./assets/icons/icon-192.png">
 <title>Freedom Fighters vs War Mongers</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -82,7 +82,7 @@ document.addEventListener('keydown', e => {
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
+    navigator.serviceWorker.register('./assets/icons/sw.js').catch(() => {});
   });
 }
 
