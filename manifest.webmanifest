@@ -1,0 +1,32 @@
+{
+  "name": "Freedom Fighters vs War Mongers",
+  "short_name": "Freedom Fighters",
+  "description": "Single-file browser shooter with touch controls, boss telegraphs, and installable Android home-screen support.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display_override": ["fullscreen", "standalone", "minimal-ui"],
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

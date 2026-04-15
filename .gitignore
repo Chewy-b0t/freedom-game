@@ -1,2 +1,2 @@
-# Internal files — not for public GitHub
-roadmap.md
+# Local Python cache
+__pycache__/
