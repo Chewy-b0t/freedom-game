@@ -853,6 +853,14 @@ function pollGamepadInput() {
   gamepadState.buttonDown.shoot = shootHeld;
   gamepadState.shootDown = shootHeld;
 
+  // Right stick also triggers shooting when pushed past threshold
+  const rightStickPush = rawAimX * rawAimX + rawAimY * rawAimY > 0.25;
+  if (rightStickPush && !gamepadState.buttonDown.rightStickShoot) {
+    gamepadState.shootClicked = true;
+  }
+  gamepadState.buttonDown.rightStickShoot = rightStickPush;
+  gamepadState.shootDown = shootHeld || rightStickPush;
+
   updateGamepadButtonState('confirm', isGamepadButtonDown(pad, 0), () => { gamepadState.confirmPressed = true; });
   updateGamepadButtonState('back', isGamepadButtonDown(pad, 1), () => { gamepadState.backPressed = true; });
   updateGamepadButtonState('settings', isGamepadButtonDown(pad, 2), () => { gamepadState.settingsPressed = true; });
@@ -4470,12 +4478,14 @@ function updatePlaying(dt) {
 
   // Check shop proximity
   let nearShop = shops.find(s => s.active && dist(s, player) < 60);
-  if ((keys[keybinds.shop] || gamepadState.shopPressed) && nearShop && !nearShop.open) {
+  if ((keys[keybinds.shop] || gamepadState.shopPressed || gamepadState.confirmPressed) && nearShop && !nearShop.open) {
     gameState = 'shop';
     nearShop.open = true;
     shopSelection = 0;
     playSound('shopOpen');
     keys[keybinds.shop] = false;
+    gamepadState.shopPressed = false;
+    gamepadState.confirmPressed = false;
     return;
   }
 
@@ -4874,15 +4884,27 @@ function updateShop(dt) {
   };
 
   // Navigate shop
+  const SHOP_NAV_COOLDOWN = 180; // ms between stick scrolls
+  const now = Date.now();
+
   if (keys['w'] || keys['arrowup'] || gamepadState.menuUpPressed) {
     shopSelection = (shopSelection - 1 + shopItems.length) % shopItems.length;
     keys['w'] = false;
     keys['arrowup'] = false;
+    gamepadState._shopNavTimer = now;
+  } else if (gamepadState.moveY < -0.5 && (now - (gamepadState._shopNavTimer || 0)) > SHOP_NAV_COOLDOWN) {
+    shopSelection = (shopSelection - 1 + shopItems.length) % shopItems.length;
+    gamepadState._shopNavTimer = now;
   }
+
   if (keys['s'] || keys['arrowdown'] || gamepadState.menuDownPressed) {
     shopSelection = (shopSelection + 1) % shopItems.length;
     keys['s'] = false;
     keys['arrowdown'] = false;
+    gamepadState._shopNavTimer = now;
+  } else if (gamepadState.moveY > 0.5 && (now - (gamepadState._shopNavTimer || 0)) > SHOP_NAV_COOLDOWN) {
+    shopSelection = (shopSelection + 1) % shopItems.length;
+    gamepadState._shopNavTimer = now;
   }
 
   if (keys[' '] || keys['enter'] || gamepadState.confirmPressed) {
