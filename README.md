@@ -1,122 +1,275 @@
-# Freedom Fighters vs War Mongers
+<div align="center">
 
-2D top-down browser shooter built as a single `index.html` file. No framework, no build step, no package install.
+![Freedom Fighters vs War Mongers](icon.svg)
 
-Current state: `v0.1.9` is complete.
+# 🎮 Freedom Fighters vs War Mongers
 
-What is already in:
-- Wave survival loop with shops, sats, power-ups, allies, combos, bosses, biomes, achievements, daily challenge, meta progression, skins, remappable keybinds, and talent trees
-- Mobile/touch support with dual-stick controls, mobile aim assist, and gameplay touch buttons
-- Accessibility settings including brightness, UI scale, reduced motion, colorblind mode, keybind hint toggle, and boss attack overlays with text + shape telegraphs
+[![Version](https://img.shields.io/badge/version-v0.1.9-blue?style=for-the-badge)](#)
+[![License](https://img.shields.io/badge/license-Open-green?style=for-the-badge)](#)
+[![Size](https://img.shields.io/badge/single--file-100%25-orange?style=for-the-badge)](#)
+[![PWA](https://img.shields.io/badge/PWA-Installable-purple?style=for-the-badge)](#)
+[![Platform](https://img.shields.io/badge/platform-Browser%20%7C%20Mobile-lightblue?style=for-the-badge)](#)
 
-`v0.1.9` closeout notes:
-- Mobile/PWA flow was validated on Android, including install and a first-boss clear
-- Achievement persistence is now restored correctly from save data
-- Late-wave collision work now uses lightweight spatial grids for enemies and enemy bullets
-- Boss-wave minion pressure was reduced on early boss waves for better readability on touch devices
-- Arctic/Jungle biome hazards now have complete runtime config, fixing the late-cycle freeze seen when Arctic hazards first trigger
-- `dev.py` now prints a real LAN test URL instead of preferring VPN tunnel interfaces on machines with Proton or similar adapters
+### A 2D top-down browser shooter — zero dependencies, one file, infinite chaos.
 
-## Quick Start
+**[Play Now](#-quick-start)** · **[Report Bug](https://github.com/Chewy-b0t/freedom-game/issues)** · **[Request Feature](https://github.com/Chewy-b0t/freedom-game/issues)**
 
-Run the local dev server:
+</div>
+
+---
+
+## 📖 About
+
+**Freedom Fighters vs War Mongers** is a wave-based survival shooter that runs entirely in your browser. No installs, no frameworks, no build step — just a single `index.html` file that delivers a complete gaming experience.
+
+Fight through endless waves of enemies, face devastating bosses, unlock powerful weapons, build your talent tree, and climb the leaderboards. Every run is different. Every boss is a test of skill. Every upgrade feels earned.
+
+---
+
+## ✨ Features
+
+<details>
+<summary><b>⚔️ Combat & Progression</b></summary>
+
+- 🌊 **Wave Survival Loop** — Escalating enemy pressure with unique biomes
+- 👹 **Boss Fights** — Epic encounters every 5 waves with attack-specific telegraphs
+- 🧬 **Enemy Families** — Fraud, Corruption, Taxes, Abuse, Censorship, and more
+- 🛒 **Shops & Economy** — Earn sats, buy power-ups, unlock weapons
+- 🌳 **Talent Tree** — Deep branching progression across Offense, Defense, and Utility
+- 🏆 **Achievements** — Unlockable milestones with persistent tracking
+- 📅 **Daily Challenge** — Unique daily runs for bonus rewards
+- 🎨 **Skins & Meta Progression** — Persistent XP, levels, and cosmetic unlocks
+
+</details>
+
+<details>
+<summary><b>📱 Mobile & Touch Support</b></summary>
+
+- 🕹️ **Dual-Stick Controls** — Left stick movement, right stick aim & shoot
+- 🎯 **Mobile Aim Assist** — Smart targeting assistance for touch play
+- 📲 **Installable PWA** — Add to home screen for full-screen standalone experience
+- 📐 **Responsive UI** — Compact menus optimized for smaller screens
+- 🔘 **On-Screen Buttons** — WAKE, SHOP, PAUSE during gameplay
+
+</details>
+
+<details>
+<summary><b>♿ Accessibility</b></summary>
+
+- 🔆 **Brightness Control** — Adjustable display brightness
+- 🔍 **UI Scaling** — Customize interface size for comfort
+- 🎞️ **Reduced Motion** — Minimize animations for sensitive users
+- 🎨 **Colorblind Mode** — Accessible color palette options
+- 💡 **Keybind Hints** — Toggle control reference overlays
+- 📊 **Boss Attack Overlays** — Text labels + shape-based telegraphs for all boss attacks
+
+</details>
+
+<details>
+<summary><b>🎮 Controller Support</b></summary>
+
+- 🎮 **Xbox/Standard Gamepad** — Full native controller support
+  - Left stick: Move
+  - Right stick: Aim
+  - Triggers: Shoot
+  - X: Convert enemies
+  - Y: Open shop
+  - LB/RB: Switch weapons
+  - Start: Pause
+
+</details>
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- **Python 3** (for the dev server)
+- Any modern web browser (Chrome, Firefox, Safari, Edge)
+
+### Run Locally
 
 ```bash
-cd /home/y/workspace/freedom-game
+# Clone the repository
+git clone https://github.com/Chewy-b0t/freedom-game.git
+cd freedom-game
+
+# Start the dev server
 python3 dev.py
 ```
 
-Then open the local URL printed by `dev.py`, usually:
+Then open the URL printed by `dev.py` (usually `http://localhost:8080`)
 
-```text
-http://localhost:8080
+### Mobile Testing
+
+The dev server prints a LAN URL. Open it on any device on your network:
+
+```
+http://<your-lan-ip>:8080
 ```
 
-If you want to test from an Android device on the same network, use the LAN URL printed by `dev.py`. The dev server now prefers `8080`, reclaims it from your old dev process when possible, and otherwise falls forward automatically.
+> 💡 **Tip:** On Android, add the game to your home screen for a fullscreen PWA experience!
 
-## Controls
+---
 
-Desktop:
-- `WASD` or arrows: move
-- Mouse click / hold: aim and shoot
-- `Q`: convert nearby enemies
-- `E`: open shop near a station
-- `1-4`: switch weapons
-- `ESC`: pause
-- `P`: settings
-- `J`: daily challenge from the start screen
-- Xbox/standard gamepad: left stick move, right stick aim, triggers shoot, `X` convert, `Y` shop, `LB/RB` switch weapons, `Start` pause
+## 🎯 Controls
 
-Touch:
-- Left side drag: movement stick
-- Right side drag/tap: aim and shoot
-- On-screen `WAKE`, `SHOP`, `PAUSE` buttons during gameplay
-- Menus use direct tap targets
+### Desktop
 
-## Features
+| Key | Action |
+|-----|--------|
+| `WASD` / `Arrows` | Move |
+| **Mouse Click/Hold** | Aim & Shoot |
+| `Q` | Convert nearby enemies |
+| `E` | Open shop (near station) |
+| `1-4` | Switch weapons |
+| `ESC` | Pause |
+| `P` | Settings |
+| `J` | Daily challenge (start screen) |
 
-Combat and progression:
-- Multiple enemy families including late-game variants like Fraud, Corruption, Taxes, Abuse, and Censorship
-- Boss fights every 5 waves, including late bosses and attack-specific overlays
-- Shops, sats, temporary boosts, weapon unlocks, persistent unlocks, and daily challenge mode
-- Talent tree with offense, defense, and utility branches
-- Persistent player XP, levels, skins, lifetime stats, and high score
+### Touch
 
-Accessibility and UX:
-- Brightness and UI scaling
-- Reduced motion and colorblind mode
-- Optional keybind hints
-- Boss attack name panel, cycle bar, and pattern-based telegraphs
-- Compact mobile-friendly start/menu layout
-- Browser gamepad support for Xbox-style controllers
-- Installable PWA shell for Android home-screen launch
+| Gesture | Action |
+|---------|--------|
+| **Left side drag** | Movement stick |
+| **Right side drag/tap** | Aim & shoot |
+| **On-screen buttons** | WAKE / SHOP / PAUSE |
 
-Technical constraints:
-- Single-file HTML game
-- Zero runtime dependencies
-- Works in modern desktop and mobile browsers
+---
 
-## Local Testing
+## 🏗️ Architecture
 
-Recommended manual test flow:
+```
+freedom-game/
+├── index.html          # 🎮 The entire game — no build step needed
+├── dev.py              # 🔧 Dev server with live reload & LAN support
+├── manifest.webmanifest# 📱 PWA manifest for installable shell
+├── sw.js               # ⚙️ Service worker for offline/PWA support
+├── icon-192.png        # 🖼️ PWA icon (192x192)
+├── icon-512.png        # 🖼️ PWA icon (512x512)
+└── icon.svg            # 🎨 Source vector icon
+```
 
-1. Start the server:
+**Design Principles:**
+- ✅ **Single file** — The entire game lives in `index.html`
+- ✅ **Zero dependencies** — No npm, no bundler, no framework
+- ✅ **Live reload** — Save `index.html` and connected browsers refresh automatically
+- ✅ **Modern browsers** — Works on desktop and mobile without polyfills
+
+---
+
+## 🧪 Testing Guide
+
+### Manual Test Flow
+
+1. **Start the server:**
+   ```bash
+   python3 dev.py
+   ```
+
+2. **Desktop Basics:**
+   - [ ] Start a run, move, shoot, pause
+   - [ ] Open settings, toggle brightness/UI scale
+   - [ ] Test keybind hints and touch controls
+   - [ ] Open keybinds and talents from settings
+
+3. **Touch/Mobile:**
+   - [ ] Open LAN URL on Android (Chrome recommended)
+   - [ ] Test left-stick movement + right-side aim/shoot
+   - [ ] Verify WAKE / SHOP / PAUSE buttons
+   - [ ] Navigate settings, talents, shop with taps only
+   - [ ] Add to home screen → confirm fullscreen launch
+
+4. **Boss Accessibility:**
+   - [ ] Reach/spawn a boss
+   - [ ] Verify attack label panel updates
+   - [ ] Verify cycle progress bar moves
+   - [ ] Verify ring/line/vertical/seeker/blink telegraphs
+
+5. **Persistence:**
+   - [ ] Change settings → reload page → verify they persist
+   - [ ] Verify high score persists across sessions
+
+---
+
+## 🛠️ Development
+
+### Live Reload
+
+The dev server (`dev.py`) injects a live-reload script. Saving `index.html` automatically refreshes all connected browsers — no manual refresh needed.
+
+### Syntax Checking
+
+Extract the `<script>` block from `index.html` to a temp `.js` file, then run:
+
 ```bash
-cd /home/y/workspace/freedom-game
-python3 dev.py
+node --check temp.js
 ```
 
-2. Open the local URL printed by `dev.py`, usually:
-```text
-http://localhost:8080
-```
+### Dev Server Features
 
-3. Verify desktop basics:
-- Start a run
-- Move, shoot, pause, open settings
-- Toggle brightness, UI scale, keybind hints, and touch controls
-- Open keybinds and talents from settings
+- 🔁 Automatic live reload on file save
+- 🌐 Smart LAN IP selection (prefers local network over VPN adapters)
+- 📱 Mobile-friendly testing URL
+- 🔄 Port reclamation (grabs `8080` from stale processes)
 
-4. Verify touch/mobile behavior:
-- Open the LAN URL on your Android phone in Chrome
-- Confirm the compact start screen layout fits cleanly
-- Start a run and test left-stick movement, right-side aim/shoot, and `WAKE` / `SHOP` / `PAUSE`
-- Open settings, keybinds, talents, and shop with taps only
-- Add it to the home screen and confirm standalone/fullscreen launch behavior
+---
 
-5. Verify accessibility overlays:
-- Reach or spawn a boss
-- Confirm the boss attack label panel updates
-- Confirm the cycle progress bar moves
-- Confirm ring/line/vertical/seeker/blink telegraphs appear distinctly
+## 📸 Screenshots
 
-6. Verify persistence:
-- Change settings
-- Reload the page
-- Confirm settings and high score persist
+> _Add gameplay screenshots here!_
 
-## Dev Notes
+<div align="center">
+  <img src="https://via.placeholder.com/400x225/121725/f7931a?text=Gameplay+Screenshot+1" width="400" alt="Screenshot 1">
+  <img src="https://via.placeholder.com/400x225/121725/4dd0e1?text=Gameplay+Screenshot+2" width="400" alt="Screenshot 2">
+</div>
 
-- `dev.py` injects a small live-reload script, so saving `index.html` refreshes connected browsers automatically.
-- Syntax check for the embedded script can be done by extracting the `<script>` block to a temp `.js` file and running `node --check` on that file.
-- The game currently lives entirely in `index.html`; there is no separate asset pipeline.
+---
+
+## 🗺️ Roadmap
+
+### Completed (v0.1.9) ✅
+
+- [x] Settings: brightness, UI scale, keybind hints, touch controls
+- [x] Touch gameplay with dual-stick controls + aim assist
+- [x] Mobile-responsive menu layout
+- [x] Boss accessibility overlays (attack names, cycle bar, telegraphs)
+- [x] PWA install shell, manifest, icons, service worker
+- [x] Performance: cached grid rendering, spatial grids for collisions
+- [x] Achievement verification & persistence
+- [x] Boss-wave readability tuning for touch
+- [x] Arctic/Jungle hazard config fixes
+- [x] Dev server LAN URL correction
+
+### Coming Soon 🔮
+
+- [ ] Landscape space optimization (better use of wide screens)
+- [ ] Achievement gallery & progression surfacing
+- [ ] Deeper late-wave performance pass (if profiling shows need)
+- [ ] Richer PWA polish (offline messaging, update prompts)
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Whether it's:
+
+- 🐛 Bug reports
+- 💡 Feature suggestions
+- 🎨 Art/assets
+- 🔧 Code improvements
+
+Feel free to [open an issue](https://github.com/Chewy-b0t/freedom-game/issues) or [submit a PR](https://github.com/Chewy-b0t/freedom-game/pulls).
+
+---
+
+<div align="center">
+
+**Built with nothing but HTML, CSS, and JavaScript. No excuses.**
+
+Made with ❤️ by [Chewy-b0t](https://github.com/Chewy-b0t)
+
+⭐ **Star this repo if you enjoyed the game!** ⭐
+
+</div>
