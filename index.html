@@ -441,7 +441,8 @@ const COLORS = {
 const keys = {};
 const mouse = { x: GAME_W / 2, y: GAME_H / 2, down: false, clicked: false };
 const TOUCH_LEFT_BASE = { x: 132, y: GAME_H - 120 };
-const TOUCH_RIGHT_BASE = { x: GAME_W - 170, y: GAME_H - 130 };
+const TOUCH_RIGHT_BASE = { x: GAME_W - 210, y: GAME_H - 185 };
+const GAMEPAD_DEADZONE = 0.2;
 const touchState = {
   leftId: null,
   rightId: null,
@@ -457,10 +458,35 @@ const touchState = {
   rightStickY: TOUCH_RIGHT_BASE.y,
   aimX: 1,
   aimY: 0,
-  rightX: GAME_W - 170,
-  rightY: GAME_H - 130,
+  rightX: TOUCH_RIGHT_BASE.x,
+  rightY: TOUCH_RIGHT_BASE.y,
   shootDown: false,
   shootClicked: false
+};
+const gamepadState = {
+  connected: false,
+  name: '',
+  moveX: 0,
+  moveY: 0,
+  aimX: 1,
+  aimY: 0,
+  aimActive: false,
+  shootDown: false,
+  shootClicked: false,
+  confirmPressed: false,
+  backPressed: false,
+  settingsPressed: false,
+  dailyPressed: false,
+  pausePressed: false,
+  convertPressed: false,
+  shopPressed: false,
+  nextWeaponPressed: false,
+  prevWeaponPressed: false,
+  menuUpPressed: false,
+  menuDownPressed: false,
+  menuLeftPressed: false,
+  menuRightPressed: false,
+  buttonDown: {}
 };
 let touchControlsEnabled = prefersCoarsePointer;
 let brightness = 1;
@@ -756,6 +782,92 @@ function circleCollision(a, b) { return dist(a, b) < a.radius + b.radius; }
 function pointInRect(point, rect) {
   return point.x >= rect.x && point.x <= rect.x + rect.w && point.y >= rect.y && point.y <= rect.y + rect.h;
 }
+function applyAxisDeadzone(value, deadzone = GAMEPAD_DEADZONE) {
+  const magnitude = Math.abs(value);
+  if (magnitude <= deadzone) return 0;
+  const scaled = (magnitude - deadzone) / (1 - deadzone);
+  return Math.sign(value) * scaled;
+}
+function isGamepadButtonDown(gamepad, index) {
+  const button = gamepad && gamepad.buttons ? gamepad.buttons[index] : null;
+  return !!button && (button.pressed || button.value > 0.5);
+}
+function clearGamepadTransientState() {
+  gamepadState.shootClicked = false;
+  gamepadState.confirmPressed = false;
+  gamepadState.backPressed = false;
+  gamepadState.settingsPressed = false;
+  gamepadState.dailyPressed = false;
+  gamepadState.pausePressed = false;
+  gamepadState.convertPressed = false;
+  gamepadState.shopPressed = false;
+  gamepadState.nextWeaponPressed = false;
+  gamepadState.prevWeaponPressed = false;
+  gamepadState.menuUpPressed = false;
+  gamepadState.menuDownPressed = false;
+  gamepadState.menuLeftPressed = false;
+  gamepadState.menuRightPressed = false;
+}
+function resetGamepadInput() {
+  clearGamepadTransientState();
+  gamepadState.connected = false;
+  gamepadState.name = '';
+  gamepadState.moveX = 0;
+  gamepadState.moveY = 0;
+  gamepadState.aimActive = false;
+  gamepadState.shootDown = false;
+  gamepadState.buttonDown = {};
+}
+function updateGamepadButtonState(name, isDown, onPress) {
+  const wasDown = !!gamepadState.buttonDown[name];
+  if (isDown && !wasDown) onPress();
+  gamepadState.buttonDown[name] = isDown;
+}
+function pollGamepadInput() {
+  clearGamepadTransientState();
+  const pads = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter(Boolean) : [];
+  const pad = pads.find(gamepad => gamepad && gamepad.connected);
+  if (!pad) {
+    resetGamepadInput();
+    return;
+  }
+
+  gamepadState.connected = true;
+  gamepadState.name = pad.id || 'Gamepad';
+  gamepadState.moveX = applyAxisDeadzone(pad.axes[0] || 0);
+  gamepadState.moveY = applyAxisDeadzone(pad.axes[1] || 0);
+
+  const rawAimX = applyAxisDeadzone(pad.axes[2] || 0);
+  const rawAimY = applyAxisDeadzone(pad.axes[3] || 0);
+  const aimMagnitude = Math.hypot(rawAimX, rawAimY);
+  gamepadState.aimActive = aimMagnitude > 0.01;
+  if (gamepadState.aimActive) {
+    gamepadState.aimX = rawAimX / aimMagnitude;
+    gamepadState.aimY = rawAimY / aimMagnitude;
+  }
+
+  const shootHeld = isGamepadButtonDown(pad, 7) || isGamepadButtonDown(pad, 6);
+  if (shootHeld && !gamepadState.buttonDown.shoot) {
+    gamepadState.shootClicked = true;
+  }
+  gamepadState.buttonDown.shoot = shootHeld;
+  gamepadState.shootDown = shootHeld;
+
+  updateGamepadButtonState('confirm', isGamepadButtonDown(pad, 0), () => { gamepadState.confirmPressed = true; });
+  updateGamepadButtonState('back', isGamepadButtonDown(pad, 1), () => { gamepadState.backPressed = true; });
+  updateGamepadButtonState('settings', isGamepadButtonDown(pad, 2), () => { gamepadState.settingsPressed = true; });
+  updateGamepadButtonState('daily', isGamepadButtonDown(pad, 3), () => { gamepadState.dailyPressed = true; });
+  updateGamepadButtonState('prevWeapon', isGamepadButtonDown(pad, 4), () => { gamepadState.prevWeaponPressed = true; });
+  updateGamepadButtonState('nextWeapon', isGamepadButtonDown(pad, 5), () => { gamepadState.nextWeaponPressed = true; });
+  updateGamepadButtonState('pause', isGamepadButtonDown(pad, 9), () => { gamepadState.pausePressed = true; });
+  updateGamepadButtonState('menuUp', isGamepadButtonDown(pad, 12), () => { gamepadState.menuUpPressed = true; });
+  updateGamepadButtonState('menuDown', isGamepadButtonDown(pad, 13), () => { gamepadState.menuDownPressed = true; });
+  updateGamepadButtonState('menuLeft', isGamepadButtonDown(pad, 14), () => { gamepadState.menuLeftPressed = true; });
+  updateGamepadButtonState('menuRight', isGamepadButtonDown(pad, 15), () => { gamepadState.menuRightPressed = true; });
+
+  gamepadState.convertPressed = gamepadState.settingsPressed;
+  gamepadState.shopPressed = gamepadState.dailyPressed;
+}
 function filterInPlace(array, predicate) {
   let write = 0;
   for (let read = 0; read < array.length; read++) {
@@ -906,6 +1018,10 @@ class Player {
     if (touchControlsEnabled) {
       dx += touchState.moveX;
       dy += touchState.moveY;
+    }
+    if (gamepadState.connected) {
+      dx += gamepadState.moveX;
+      dy += gamepadState.moveY;
     }
 
     // Normalize diagonal
@@ -3241,7 +3357,7 @@ function formatKey(key) {
 }
 
 function getAimAssistTarget(playerEntity, fallbackTarget) {
-  if (!touchControlsEnabled || !playerEntity) return fallbackTarget;
+  if (!playerEntity) return fallbackTarget;
 
   const currentAngle = Math.atan2(fallbackTarget.y - playerEntity.y, fallbackTarget.x - playerEntity.x);
   const maxAssistAngle = 0.42;
@@ -3289,10 +3405,21 @@ function getAimTarget() {
     };
     return getAimAssistTarget(player, fallbackTarget);
   }
+  if (gamepadState.connected && player && (gamepadState.aimActive || gamepadState.shootDown)) {
+    const fallbackTarget = {
+      x: player.x + gamepadState.aimX * 240,
+      y: player.y + gamepadState.aimY * 240
+    };
+    return getAimAssistTarget(player, fallbackTarget);
+  }
   return mouse;
 }
 
 function consumePrimaryShootPressed() {
+  if (gamepadState.shootClicked) {
+    gamepadState.shootClicked = false;
+    return true;
+  }
   if (touchControlsEnabled && touchState.shootClicked) {
     touchState.shootClicked = false;
     return true;
@@ -3305,7 +3432,7 @@ function consumePrimaryShootPressed() {
 }
 
 function isPrimaryShootHeld() {
-  return mouse.down || (touchControlsEnabled && touchState.shootDown);
+  return mouse.down || (touchControlsEnabled && touchState.shootDown) || gamepadState.shootDown;
 }
 
 // --- Settings ---
@@ -4313,9 +4440,15 @@ function updatePlaying(dt) {
   if (keys[keybinds.weapon4] && player.weapons.length > 3) { player.currentWeapon = 3; keys[keybinds.weapon4] = false; }
   if (keys['5'] && player.weapons.length > 4) { player.currentWeapon = 4; keys['5'] = false; }
   if (keys['6'] && player.weapons.length > 5) { player.currentWeapon = 5; keys['6'] = false; }
+  if (gamepadState.prevWeaponPressed && player.weapons.length > 1) {
+    player.currentWeapon = (player.currentWeapon - 1 + player.weapons.length) % player.weapons.length;
+  }
+  if (gamepadState.nextWeaponPressed && player.weapons.length > 1) {
+    player.currentWeapon = (player.currentWeapon + 1) % player.weapons.length;
+  }
 
   // Laser firing (hold mouse with laser selected)
-  if (player.weapons[player.currentWeapon] === 'laser' && mouse.down) {
+  if (player.weapons[player.currentWeapon] === 'laser' && isPrimaryShootHeld()) {
     player.laserChargeTime += 16;
     if (player.laserChargeTime > 300 && Date.now() - player.lastShot > 200) {
       player.fireLaser();
@@ -4328,7 +4461,7 @@ function updatePlaying(dt) {
 
   // Railgun firing (hold to charge, release to fire)
   if (player.weapons[player.currentWeapon] === 'railgun') {
-    if (mouse.down) {
+    if (isPrimaryShootHeld()) {
       player.railChargeTime = (player.railChargeTime || 0) + 16;
     } else if (player.railChargeTime > 0) {
       player.fireRailgun();
@@ -4337,7 +4470,7 @@ function updatePlaying(dt) {
 
   // Check shop proximity
   let nearShop = shops.find(s => s.active && dist(s, player) < 60);
-  if (keys[keybinds.shop] && nearShop && !nearShop.open) {
+  if ((keys[keybinds.shop] || gamepadState.shopPressed) && nearShop && !nearShop.open) {
     gameState = 'shop';
     nearShop.open = true;
     shopSelection = 0;
@@ -4348,7 +4481,7 @@ function updatePlaying(dt) {
 
   // Wake up (convert) mechanic
   const convertKey = keybinds.convert;
-  if (keys[convertKey]) {
+  if (keys[convertKey] || gamepadState.convertPressed) {
     keys[convertKey] = false;
     for (let i = 0; i < enemies.length; i++) {
       const enemy = enemies[i];
@@ -4741,18 +4874,18 @@ function updateShop(dt) {
   };
 
   // Navigate shop
-  if (keys['w'] || keys['arrowup']) {
+  if (keys['w'] || keys['arrowup'] || gamepadState.menuUpPressed) {
     shopSelection = (shopSelection - 1 + shopItems.length) % shopItems.length;
     keys['w'] = false;
     keys['arrowup'] = false;
   }
-  if (keys['s'] || keys['arrowdown']) {
+  if (keys['s'] || keys['arrowdown'] || gamepadState.menuDownPressed) {
     shopSelection = (shopSelection + 1) % shopItems.length;
     keys['s'] = false;
     keys['arrowdown'] = false;
   }
 
-  if (keys[' ']) {
+  if (keys[' '] || keys['enter'] || gamepadState.confirmPressed) {
     buyShopItem(shopSelection);
     keys['enter'] = false;
     keys[' '] = false;
@@ -4784,7 +4917,7 @@ function updateShop(dt) {
     mouse.down = false;
   }
 
-  if (keys[keybinds.shop] || keys[keybinds.pause]) {
+  if (keys[keybinds.shop] || keys[keybinds.pause] || gamepadState.backPressed || gamepadState.pausePressed) {
     // Close shop
     const shop = shops.find(s => s.open);
     if (shop) shop.open = false;
@@ -5330,7 +5463,7 @@ function renderHUD() {
   if (player.weapons.length > 1 && showKeybindHints) {
     ctx.fillStyle = COLORS.textDim;
     ctx.font = '9px monospace';
-    ctx.fillText('1-4 switch', hudW / 2, hudH - 20);
+    ctx.fillText(gamepadState.connected ? 'LB/RB switch' : '1-4 switch', hudW / 2, hudH - 20);
   }
 
   // Boost timers
@@ -5396,10 +5529,11 @@ function renderHUD() {
     ctx.fillStyle = COLORS.textDim;
     ctx.font = '10px monospace';
     ctx.textAlign = 'right';
-    const convertHint = touchControlsEnabled ? 'WAKE btn' : formatKey(keybinds.convert);
-    const shopHint = touchControlsEnabled ? 'SHOP btn' : formatKey(keybinds.shop);
-    const shootHint = touchControlsEnabled ? 'Right aim/shoot' : 'Click shoot';
-    const moveHint = touchControlsEnabled ? 'Left stick move' : 'WASD move';
+    const usingGamepad = gamepadState.connected;
+    const convertHint = usingGamepad ? 'X wake' : touchControlsEnabled ? 'WAKE btn' : formatKey(keybinds.convert);
+    const shopHint = usingGamepad ? 'Y shop' : touchControlsEnabled ? 'SHOP btn' : formatKey(keybinds.shop);
+    const shootHint = usingGamepad ? 'RT/LT shoot' : touchControlsEnabled ? 'Right aim/shoot' : 'Click shoot';
+    const moveHint = usingGamepad ? 'LS move | RS aim' : touchControlsEnabled ? 'Left stick move' : 'WASD move';
     ctx.fillText(`${moveHint} | ${shootHint} | ${convertHint} | ${shopHint}`, hudW - 15, hudH - MINIMAP_SIZE - 25);
   }
   ctx.restore();
@@ -5873,11 +6007,12 @@ function renderStartScreen() {
 
   ctx.fillStyle = COLORS.text;
   ctx.font = layout.compact ? '11px monospace' : '12px monospace';
+  const usingGamepad = gamepadState.connected;
   const lines = [
-    touchControlsEnabled ? 'Left Stick - Move' : 'WASD / Arrows - Move',
-    touchControlsEnabled ? 'Right Side - Aim + Shoot' : 'Mouse Click - Shoot',
-    `${touchControlsEnabled ? 'Wake Button' : 'Q'} - Convert enemies`,
-    `${touchControlsEnabled ? 'Shop Button' : 'E'} - Open Shop`,
+    usingGamepad ? 'Left Stick - Move' : touchControlsEnabled ? 'Left Stick - Move' : 'WASD / Arrows - Move',
+    usingGamepad ? 'Right Stick - Aim | Triggers Shoot' : touchControlsEnabled ? 'Right Side - Aim + Shoot' : 'Mouse Click - Shoot',
+    `${usingGamepad ? 'X' : touchControlsEnabled ? 'Wake Button' : 'Q'} - Convert enemies`,
+    `${usingGamepad ? 'Y' : touchControlsEnabled ? 'Shop Button' : 'E'} - Open Shop`,
     '',
     'Collect sats from defeated foes',
     'Buy power-ups at Bitcoin shops',
@@ -5998,10 +6133,10 @@ function renderGameOver() {
   ctx.globalAlpha = pulse;
   ctx.fillStyle = COLORS.bitcoin;
   ctx.font = 'bold 20px monospace';
-  ctx.fillText('[ CLICK TO RESTART ]', GAME_W / 2, GAME_H / 2 + 150);
+  ctx.fillText(gamepadState.connected ? '[ A / START TO RESTART ]' : '[ CLICK TO RESTART ]', GAME_W / 2, GAME_H / 2 + 150);
   ctx.globalAlpha = 1;
 
-  if (mouse.clicked) {
+  if (mouse.clicked || gamepadState.confirmPressed || gamepadState.pausePressed) {
     mouse.clicked = false;
     initGame();
   }
@@ -6088,6 +6223,19 @@ function gameLoop(timestamp) {
   frameCount++;
   const dt = Math.min(timestamp - lastTime, 50); // cap delta to avoid spiral
   lastTime = timestamp;
+  pollGamepadInput();
+
+  if (gameState === 'start' && !talentsOpen && !keybindsOpen && !settingsOpen) {
+    if (gamepadState.settingsPressed) {
+      settingsOpen = true;
+      settingsSelection = 0;
+    } else if (gamepadState.dailyPressed) {
+      dailyMode = false;
+      startDailyChallenge();
+    } else if (gamepadState.confirmPressed || gamepadState.pausePressed) {
+      try { initGame(); } catch (e) { console.error(e); }
+    }
+  }
 
   // Handle start screen clicks in game loop (single point of truth)
   if (gameState === 'start' && mouse.clicked && !talentsOpen && !keybindsOpen && !settingsOpen) {
@@ -6122,8 +6270,8 @@ function gameLoop(timestamp) {
 
   // Settings handling
   if (settingsOpen) {
-    if (keys['w'] || keys['arrowup']) { settingsSelection = (settingsSelection - 1 + SETTINGS_ITEMS.length) % SETTINGS_ITEMS.length; keys['w'] = false; keys['arrowup'] = false; }
-    if (keys['s'] || keys['arrowdown']) { settingsSelection = (settingsSelection + 1) % SETTINGS_ITEMS.length; keys['s'] = false; keys['arrowdown'] = false; }
+    if (keys['w'] || keys['arrowup'] || gamepadState.menuUpPressed) { settingsSelection = (settingsSelection - 1 + SETTINGS_ITEMS.length) % SETTINGS_ITEMS.length; keys['w'] = false; keys['arrowup'] = false; }
+    if (keys['s'] || keys['arrowdown'] || gamepadState.menuDownPressed) { settingsSelection = (settingsSelection + 1) % SETTINGS_ITEMS.length; keys['s'] = false; keys['arrowdown'] = false; }
     const activateSettingsItem = item => {
       if (item.key === 'volume') {
         masterVolume = Math.round((masterVolume + 0.1) * 10) / 10;
@@ -6178,7 +6326,7 @@ function gameLoop(timestamp) {
         settingsOpen = false;
       }
     };
-    if (keys[' '] || keys['enter']) {
+    if (keys[' '] || keys['enter'] || gamepadState.confirmPressed) {
       activateSettingsItem(SETTINGS_ITEMS[settingsSelection]);
       keys[' '] = false;
       keys['enter'] = false;
@@ -6198,15 +6346,15 @@ function gameLoop(timestamp) {
       mouse.clicked = false;
       mouse.down = false;
     }
-    if (keys['escape']) { settingsOpen = false; keys['escape'] = false; }
+    if (keys['escape'] || gamepadState.backPressed) { settingsOpen = false; keys['escape'] = false; }
   }
 
   // Keybinds editor
   if (keybindsOpen && gameState === 'start') {
     if (!remappingKey) {
-      if (keys['w'] || keys['arrowup']) { keybindsSelection = (keybindsSelection - 1 + KEYBINDS_LIST.length) % KEYBINDS_LIST.length; keys['w'] = false; keys['arrowup'] = false; }
-      if (keys['s'] || keys['arrowdown']) { keybindsSelection = (keybindsSelection + 1) % KEYBINDS_LIST.length; keys['s'] = false; keys['arrowdown'] = false; }
-      if (keys[' '] || keys['enter']) {
+      if (keys['w'] || keys['arrowup'] || gamepadState.menuUpPressed) { keybindsSelection = (keybindsSelection - 1 + KEYBINDS_LIST.length) % KEYBINDS_LIST.length; keys['w'] = false; keys['arrowup'] = false; }
+      if (keys['s'] || keys['arrowdown'] || gamepadState.menuDownPressed) { keybindsSelection = (keybindsSelection + 1) % KEYBINDS_LIST.length; keys['s'] = false; keys['arrowdown'] = false; }
+      if (keys[' '] || keys['enter'] || gamepadState.confirmPressed) {
         remappingKey = KEYBINDS_LIST[keybindsSelection].key;
         keys[' '] = false;
         keys['enter'] = false;
@@ -6237,7 +6385,7 @@ function gameLoop(timestamp) {
       mouse.clicked = false;
       mouse.down = false;
     }
-    if (keys['escape']) {
+    if (keys['escape'] || gamepadState.backPressed) {
       if (remappingKey) { remappingKey = null; }
       else { keybindsOpen = false; settingsOpen = true; }
       keys['escape'] = false;
@@ -6245,9 +6393,12 @@ function gameLoop(timestamp) {
   }
 
   // Pause handling
+  if (gameState === 'playing' && gamepadState.pausePressed) {
+    paused = !paused;
+  }
   if (paused && gameState === 'playing') {
     // Shop access from pause
-    if (keys['s'] && !settingsOpen) {
+    if ((keys['s'] || keys[keybinds.shop] || gamepadState.shopPressed) && !settingsOpen) {
       const nearShop = shops.find(s => s.active && dist(s, player) < 60);
       if (nearShop) {
         gameState = 'shop';
@@ -6260,6 +6411,7 @@ function gameLoop(timestamp) {
         waveAnnounceTimer = 1000;
       }
       keys['s'] = false;
+      keys[keybinds.shop] = false;
     }
 
     render();
@@ -6269,12 +6421,12 @@ function gameLoop(timestamp) {
   }
 
   // Settings from pause (mouse click)
-  if (paused && keys['p']) {
+  if (paused && (keys['p'] || gamepadState.settingsPressed)) {
     settingsOpen = !settingsOpen;
     settingsSelection = 0;
     keys['p'] = false;
   }
-  if (paused && mouse.clicked) {
+  if (paused && (mouse.clicked || gamepadState.confirmPressed || gamepadState.pausePressed)) {
     paused = false;
     mouse.clicked = false;
     mouse.down = false;
@@ -6289,9 +6441,9 @@ function gameLoop(timestamp) {
     renderTalents();
     // Talent tree input
     const { branches, branchW, branchY, startY, spacing, compact } = getTalentsLayout();
-    if (keys['a'] || keys['arrowleft']) { talentsBranch = (talentsBranch - 1 + branches.length) % branches.length; keys['a'] = false; keys['arrowleft'] = false; }
-    if (keys['d'] || keys['arrowright']) { talentsBranch = (talentsBranch + 1) % branches.length; keys['d'] = false; keys['arrowright'] = false; }
-    if (keys['escape']) { talentsOpen = false; respecConfirm = false; keys['escape'] = false; }
+    if (keys['a'] || keys['arrowleft'] || gamepadState.menuLeftPressed) { talentsBranch = (talentsBranch - 1 + branches.length) % branches.length; keys['a'] = false; keys['arrowleft'] = false; }
+    if (keys['d'] || keys['arrowright'] || gamepadState.menuRightPressed) { talentsBranch = (talentsBranch + 1) % branches.length; keys['d'] = false; keys['arrowright'] = false; }
+    if (keys['escape'] || gamepadState.backPressed) { talentsOpen = false; respecConfirm = false; keys['escape'] = false; }
     
     // Click handling for talents
     if (mouse.clicked) {

@@ -45,6 +45,7 @@ Desktop:
 - `ESC`: pause
 - `P`: settings
 - `J`: daily challenge from the start screen
+- Xbox/standard gamepad: left stick move, right stick aim, triggers shoot, `X` convert, `Y` shop, `LB/RB` switch weapons, `Start` pause
 
 Touch:
 - Left side drag: movement stick
@@ -67,6 +68,7 @@ Accessibility and UX:
 - Optional keybind hints
 - Boss attack name panel, cycle bar, and pattern-based telegraphs
 - Compact mobile-friendly start/menu layout
+- Browser gamepad support for Xbox-style controllers
 - Installable PWA shell for Android home-screen launch
 
 Technical constraints:
