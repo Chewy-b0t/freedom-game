@@ -925,6 +925,68 @@ function getStartScreenButtonRects(layout = getStartScreenLayout()) {
   };
 }
 
+function getStartScreenMetaRect(layout = getStartScreenLayout()) {
+  const metaW = layout.compact ? 272 : 240;
+  const metaH = layout.compact ? 58 : 55;
+  return { x: GAME_W / 2 - metaW / 2, y: layout.metaY, w: metaW, h: metaH };
+}
+
+function getInfoPanelLayout() {
+  const compact = isCompactUiLayout();
+  const boxW = compact ? 880 : 820;
+  const boxH = compact ? 560 : 520;
+  const boxX = GAME_W / 2 - boxW / 2;
+  const boxY = GAME_H / 2 - boxH / 2;
+  const tabY = boxY + 56;
+  const contentX = boxX + 26;
+  const contentY = tabY + 48;
+  const contentW = boxW - 52;
+  const contentH = boxH - 126;
+  return { compact, boxW, boxH, boxX, boxY, tabY, contentX, contentY, contentW, contentH };
+}
+
+function getInfoPanelTabRects(layout = getInfoPanelLayout()) {
+  const rects = [];
+  const tabW = Math.floor((layout.contentW - 12) / INFO_TABS.length);
+  for (let i = 0; i < INFO_TABS.length; i++) {
+    rects.push({
+      x: layout.contentX + i * (tabW + 6),
+      y: layout.tabY,
+      w: tabW,
+      h: 32
+    });
+  }
+  return rects;
+}
+
+function getInfoPanelCloseRect(layout = getInfoPanelLayout()) {
+  return { x: layout.boxX + layout.boxW - 108, y: layout.boxY + 14, w: 84, h: 24 };
+}
+
+function formatDuration(ms) {
+  const totalSeconds = Math.max(0, Math.floor((ms || 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function wrapTextLines(text, maxWidth) {
+  const words = String(text).split(/\s+/).filter(Boolean);
+  const lines = [];
+  let current = '';
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (current && ctx.measureText(next).width > maxWidth) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = next;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.length ? lines : [''];
+}
+
 function resetTouchJoystick() {
   touchState.leftId = null;
   touchState.moveX = 0;
@@ -1713,7 +1775,20 @@ class Player {
     this.timeSlowTimer = 0;
     this.magnetTimer = 0;
     // Stats tracking
-    this.stats = { kills: 0, converts: 0, bossesKilled: 0, wavesCompleted: 0, shotsFired: 0, damageDealt: 0, totalSats: 0 };
+    this.stats = {
+      kills: 0,
+      converts: 0,
+      bossesKilled: 0,
+      wavesCompleted: 0,
+      shotsFired: 0,
+      shotsHit: 0,
+      damageDealt: 0,
+      totalSats: 0,
+      elitesKilled: 0,
+      minibossesKilled: 0,
+      bestCombo: 0,
+      runTimeMs: 0
+    };
   }
 
   normalizeWeaponLoadout(preferredWeapon = null) {
@@ -1897,18 +1972,25 @@ class Player {
         const hb = new Bullet(
           this.x + Math.cos(a) * 18,
           this.y + Math.sin(a) * 18,
-          Math.cos(a) * 5,
-          Math.sin(a) * 5,
-          finalDmg * 1.5,
+          Math.cos(a) * 4.5,
+          Math.sin(a) * 4.5,
+          finalDmg * 2.2,
           'player',
           '#e040fb'
         );
         hb.homing = true;
         hb.target = target;
-        hb.turnSpeed = 0.08;
+        hb.turnSpeed = 0.14;
+        hb.acceleration = 1.015;
+        hb.maxSpeed = 8;
+        hb.radius = 6;
+        hb.explosionRadius = 90;
+        hb.splashDamage = finalDmg * 1.7;
+        hb.impactColor = '#ff5cff';
         bullets.push(hb);
         this.lastShot = now;
         playSound('shoot');
+        player.stats.shotsFired++;
         break;
 
       case 'flamethrower':
@@ -1946,6 +2028,7 @@ class Player {
         }
         this.lastShot = now;
         playSound('shoot');
+        player.stats.shotsFired++;
         break;
 
       case 'railgun':
@@ -1968,9 +2051,10 @@ class Player {
     this.railChargeTime = 0;
     
     const a = angle(this, getAimTarget());
-    const dmg = this.damageBoostTimer > 0 ? this.baseDamage * 5 : this.baseDamage * 3;
-    const finalDmg = dmg * (0.5 + chargePct * 0.5); // More charge = more damage
+    const dmg = this.damageBoostTimer > 0 ? this.baseDamage * 9 : this.baseDamage * 6;
+    const finalDmg = dmg * (0.8 + chargePct * 1.2);
     const beamLength = 800;
+    const beamRadius = 18 + chargePct * 18;
     
     // Piercing beam - hits EVERYTHING in a line
     const allTargets = [
@@ -1987,13 +2071,11 @@ class Player {
         const closestX = this.x + Math.cos(a) * proj;
         const closestY = this.y + Math.sin(a) * proj;
         const distToLine = Math.hypot(t.x - closestX, t.y - closestY);
-        if (distToLine < t.radius + 15) {
-          t.takeDamage(finalDmg);
+        if (distToLine < t.radius + beamRadius) {
+          t.takeDamage(finalDmg, 'player');
           spawnDamageNumber(closestX, closestY, finalDmg, '#00bcd4');
           hitCount++;
-          for (let i = 0; i < 8; i++) {
-            particles.push(new Particle(closestX, closestY, '#00bcd4', 4));
-          }
+          spawnExplosion(closestX, closestY, 10 + Math.floor(chargePct * 8), '#00d8ff');
         }
       }
     }
@@ -2001,11 +2083,25 @@ class Player {
     // Visual beam - wider and longer than laser
     const endX = this.x + Math.cos(a) * beamLength;
     const endY = this.y + Math.sin(a) * beamLength;
-    laserBeams.push({ x1: this.x + Math.cos(a) * 18, y1: this.y + Math.sin(a) * 18, x2: endX, y2: endY, life: 300, maxLife: 300 });
+    laserBeams.push({
+      x1: this.x + Math.cos(a) * 18,
+      y1: this.y + Math.sin(a) * 18,
+      x2: endX,
+      y2: endY,
+      life: 360,
+      maxLife: 360,
+      color: '#00d8ff',
+      width: 6 + chargePct * 8,
+      glow: 18 + chargePct * 12,
+      coreWidth: 2 + chargePct * 3
+    });
+    spawnExplosion(endX, endY, 18 + Math.floor(chargePct * 10), '#b3f5ff');
     
     playSound('laser');
-    triggerShake(8 * chargePct, 200);
+    triggerShake(8 + 10 * chargePct + hitCount * 0.5, 240);
     this.lastShot = Date.now();
+    player.stats.shotsFired++;
+    if (hitCount > 0) player.stats.shotsHit++;
   }
 
   fireLaser() {
@@ -2028,7 +2124,7 @@ class Player {
         const closestY = this.y + Math.sin(a) * proj;
         const distToLine = Math.hypot(target.x - closestX, target.y - closestY);
         if (distToLine < target.radius + 5) {
-          target.takeDamage(dmg);
+          target.takeDamage(dmg, 'player');
           spawnDamageNumber(closestX, closestY, dmg, '#00e5ff');
           hitSomething = true;
           // Laser hit particles
@@ -2043,9 +2139,22 @@ class Player {
     const laserLen = hitSomething ? 200 : 500;
     const endX = this.x + Math.cos(a) * laserLen;
     const endY = this.y + Math.sin(a) * laserLen;
-    laserBeams.push({ x1: this.x + Math.cos(a) * 18, y1: this.y + Math.sin(a) * 18, x2: endX, y2: endY, life: 150, maxLife: 150 });
+    laserBeams.push({
+      x1: this.x + Math.cos(a) * 18,
+      y1: this.y + Math.sin(a) * 18,
+      x2: endX,
+      y2: endY,
+      life: 150,
+      maxLife: 150,
+      color: '#00e5ff',
+      width: 3,
+      glow: 10,
+      coreWidth: 1
+    });
     playSound('laser');
     triggerShake(2, 80);
+    player.stats.shotsFired++;
+    if (hitSomething) player.stats.shotsHit++;
   }
 
   takeDamage(amount) {
@@ -2410,8 +2519,11 @@ class Enemy {
     playSound('enemyShoot');
   }
 
-  takeDamage(amount) {
+  takeDamage(amount, source = '') {
     this.health -= amount;
+    if (source === 'player') {
+      player.stats.damageDealt += amount;
+    }
     playSound('hit');
     spawnDamageNumber(this.x, this.y, amount, '#ffeb3b');
     // Small hit particles
@@ -2692,6 +2804,16 @@ class Bullet {
   }
 
   update() {
+    if (this.acceleration) {
+      this.vx *= this.acceleration;
+      this.vy *= this.acceleration;
+      const speed = Math.hypot(this.vx, this.vy);
+      if (this.maxSpeed && speed > this.maxSpeed) {
+        const scale = this.maxSpeed / speed;
+        this.vx *= scale;
+        this.vy *= scale;
+      }
+    }
     this.x += this.vx;
     this.y += this.vy;
     // Out of bounds
@@ -3359,8 +3481,11 @@ class Boss {
     }
   }
 
-  takeDamage(amount) {
+  takeDamage(amount, source = '') {
     this.health -= amount;
+    if (source === 'player') {
+      player.stats.damageDealt += amount;
+    }
     this.flashTimer = 80;
     spawnDamageNumber(this.x + rand(-20, 20), this.y + rand(-20, 20), amount, '#ffeb3b');
     if (Math.random() < 0.3) playSound('hit');
@@ -3781,6 +3906,8 @@ const MAX_ALLIES = 8; // Prevent late-game slowdown from too many allies
 let tutorialHints = [];
 let tutorialIndex = 0;
 let tutorialShown = new Set();
+let infoPanelOpen = false;
+let infoPanelTab = 0;
 
 const TUTORIAL_HINTS = [
   { id: 'move', text: 'WASD to move', duration: 3000, condition: () => true },
@@ -3802,6 +3929,63 @@ function checkTutorialHints() {
     }
   }
 }
+
+const TUTORIAL_PAGES = [
+  {
+    title: 'Controls',
+    color: '#4dd0e1',
+    lines: [
+      'Move with WASD, arrows, touch, or left stick.',
+      'Aim and fire with mouse, touch aim, or right stick.',
+      'Pause with ESC or the controller pause button.'
+    ]
+  },
+  {
+    title: 'Core Loop',
+    color: '#ffb74d',
+    lines: [
+      'Clear waves, collect sats, then spend them at Bitcoin shops.',
+      'Every 3 waves brings a shop. Every 5 brings a boss.',
+      'Wave pressure scales fast, so economy and positioning matter.'
+    ]
+  },
+  {
+    title: 'Wake Up',
+    color: '#81c784',
+    lines: [
+      'Converted enemies become allies instead of dying.',
+      'Wake them during the green convert window for bonus sats.',
+      'Use converts to buy space during elite waves.'
+    ]
+  },
+  {
+    title: 'Weapons',
+    color: '#ce93d8',
+    lines: [
+      'Shotgun controls space. Flamethrower dominates close crowds.',
+      'Laser is infinite and surgical. Railgun is the premium beam.',
+      'Homing missiles now explode into clustered threats.'
+    ]
+  },
+  {
+    title: 'Boss Reads',
+    color: '#ff8a65',
+    lines: [
+      'Watch the boss panel for pattern and timing cues.',
+      'Ring, line, seeker, and blink attacks all telegraph differently.',
+      'Survival matters more than greed on boss waves.'
+    ]
+  },
+  {
+    title: 'Progression',
+    color: '#ffd54f',
+    lines: [
+      'Level ups feed talent points and unlock long-term bonuses.',
+      'Achievements and skins persist between runs.',
+      'The meta hub tracks your best runs, lifetime totals, and mastery.'
+    ]
+  }
+];
 let allies = [];
 
 // --- Environmental Hazards ---
@@ -3855,7 +4039,13 @@ const ACHIEVEMENTS = [
   { id: 'minibossHunter', name: 'Miniboss Hunter', desc: 'Defeat 5 minibosses', icon: '👑', check: s => s.minibossesKilled >= 5 },
   { id: 'wave50', name: 'Unstoppable', desc: 'Reach wave 50', icon: '🌟', check: (s, w) => w >= 50 }
 ];
+const INFO_TABS = [
+  { key: 'tutorial', label: 'Tutorial' },
+  { key: 'achievements', label: 'Achievements' },
+  { key: 'stats', label: 'Stats' }
+];
 let unlockedAchievements = new Set();
+let storedUnlockedWeapons = new Set(['pistol']);
 let newAchievements = []; // newly unlocked this session
 let wave = 0;
 let waveTimer = 0;
@@ -4026,6 +4216,31 @@ let currentBiome = 0;
 let biomeChangeWave = 5; // change biome every 5 waves
 let biomeFlashTimer = 0;
 let visitedBiomes = new Set([0]); // track visited biomes for achievement
+
+function getAchievementProgress(achievement) {
+  const current = player ? player.stats : {};
+  switch (achievement.id) {
+    case 'firstBlood': return `${Math.min(current.kills || 0, 1)}/1 kill`;
+    case 'wave5': return `${Math.min(lifetimeStats.bestWave || 0, 5)}/5 waves`;
+    case 'wave10': return `${Math.min(lifetimeStats.bestWave || 0, 10)}/10 waves`;
+    case 'wave25': return `${Math.min(lifetimeStats.bestWave || 0, 25)}/25 waves`;
+    case 'wave40': return `${Math.min(lifetimeStats.bestWave || 0, 40)}/40 waves`;
+    case 'wave50': return `${Math.min(lifetimeStats.bestWave || 0, 50)}/50 waves`;
+    case 'bossSlayer': return `${Math.min(lifetimeStats.totalBosses || 0, 1)}/1 boss`;
+    case 'systemDefeated': return unlockedAchievements.has('systemDefeated') ? 'Complete' : 'Locked';
+    case 'combo10': return `${Math.min(Math.max(lifetimeStats.bestCombo || 0, current.bestCombo || 0), 10)}/10 combo`;
+    case 'sats1000': return `${Math.min(current.totalSats || 0, 1000)}/1000 sats`;
+    case 'pacifist': return `${Math.min(current.converts || 0, 10)}/10 converts`;
+    case 'arsenal': {
+      const unlockedWeaponCount = player && player.unlockedWeapons ? player.unlockedWeapons.size : storedUnlockedWeapons.size;
+      return `${Math.min(unlockedWeaponCount, 6)}/6 weapons`;
+    }
+    case 'globetrotter': return `${Math.min(visitedBiomes.size || 1, 6)}/6 biomes`;
+    case 'eliteSlayer': return `${Math.min((current.elitesKilled || 0), 10)}/10 elites`;
+    case 'minibossHunter': return `${Math.min((current.minibossesKilled || 0), 5)}/5 minibosses`;
+    default: return 'Locked';
+  }
+}
 
 // --- Pause State ---
 let paused = false;
@@ -4252,16 +4467,36 @@ let dailySeed = 0;
 let dailyScore = 0;
 let dailyHighScore = 0;
 let dailyModifiers = {};
+let runStartTime = 0;
+let lastRunStats = null;
 
 // --- Meta Progression System ---
 let playerLevel = 1;
 let playerXP = 0;
 let xpForNextLevel = 100;
-let lifetimeStats = { totalKills: 0, totalWaves: 0, totalSats: 0, totalBosses: 0, totalRuns: 0, totalTimePlayed: 0 };
+let lifetimeStats = {
+  totalKills: 0,
+  totalWaves: 0,
+  totalSats: 0,
+  totalBosses: 0,
+  totalRuns: 0,
+  totalTimePlayed: 0,
+  totalDamageDealt: 0,
+  totalConverts: 0,
+  totalShotsFired: 0,
+  totalShotsHit: 0,
+  totalDeaths: 0,
+  bestWave: 0,
+  bestScore: 0,
+  bestCombo: 0,
+  totalElitesKilled: 0,
+  totalMinibossesKilled: 0
+};
 let weaponMastery = { pistol: 0, shotgun: 0, laser: 0, homing: 0, flamethrower: 0, railgun: 0 };
 let unlockedSkins = ['default'];
 let currentSkin = 'default';
 let selectedBonus = 'none'; // starting bonus for next run
+let achievementMeta = {};
 
 const PLAYER_LEVELS = [
   { level: 1, xp: 0, bonus: 'None' },
@@ -4386,6 +4621,26 @@ function respecTalents() {
   saveTalents();
 }
 
+function getRespecCost() {
+  return gameState === 'start' ? 0 : 500;
+}
+
+function canAffordRespec() {
+  const cost = getRespecCost();
+  if (cost <= 0) return true;
+  return !!player && player.sats >= cost;
+}
+
+function tryRespecTalents() {
+  const cost = getRespecCost();
+  if (!canAffordRespec()) return false;
+  if (cost > 0 && player) {
+    player.sats -= cost;
+  }
+  respecTalents();
+  return true;
+}
+
 function saveTalents() {
   try {
     localStorage.setItem('freedomTalents', JSON.stringify({ allocatedTalents, talentPoints, totalTalentPoints }));
@@ -4470,7 +4725,8 @@ function saveMetaProgression() {
       playerLevel, playerXP, xpForNextLevel,
       lifetimeStats,
       weaponMastery,
-      unlockedSkins, currentSkin, selectedBonus
+      unlockedSkins, currentSkin, selectedBonus,
+      lastRunStats
     };
     localStorage.setItem('freedomMetaSave', JSON.stringify(data));
   } catch (e) {}
@@ -4489,6 +4745,7 @@ function loadMetaProgression() {
       if (data.unlockedSkins) unlockedSkins = data.unlockedSkins;
       if (data.currentSkin) currentSkin = data.currentSkin;
       if (data.selectedBonus) selectedBonus = data.selectedBonus;
+      if (data.lastRunStats) lastRunStats = data.lastRunStats;
     }
   } catch (e) {}
 }
@@ -4657,7 +4914,9 @@ function initGame() {
     if (saved) {
       const data = JSON.parse(saved);
       unlockedAchievements = new Set(data.achievements || []);
+      achievementMeta = data.achievementMeta || {};
       if (data.unlockedWeapons) {
+        storedUnlockedWeapons = new Set(data.unlockedWeapons);
         player.unlockedWeapons = new Set(data.unlockedWeapons);
         player.weapons = [...player.unlockedWeapons];
         player.currentWeapon = 0;
@@ -4668,6 +4927,8 @@ function initGame() {
   // Apply meta progression bonuses
   applyStartingBonus();
   lifetimeStats.totalRuns++;
+  runStartTime = Date.now();
+  player.stats.runTimeMs = 0;
 
   enemies = [];
   bullets = [];
@@ -4716,9 +4977,15 @@ function loadStoredHighScore() {
     if (saved) {
       const data = JSON.parse(saved);
       storedHighScore = data.highScore || 0;
+      unlockedAchievements = new Set(data.achievements || []);
+      achievementMeta = data.achievementMeta || {};
+      storedUnlockedWeapons = new Set(data.unlockedWeapons || ['pistol']);
     }
   } catch (e) {
     storedHighScore = 0;
+    unlockedAchievements = new Set();
+    achievementMeta = {};
+    storedUnlockedWeapons = new Set(['pistol']);
   }
 }
 
@@ -4742,17 +5009,63 @@ function loadSettings() {
 
 function saveGame() {
   try {
-    lifetimeStats.totalSats += player.stats.totalSats;
     const data = {
       highScore: player.highScore || 0,
       unlockedWeapons: [...player.unlockedWeapons],
       masterVolume: masterVolume,
       muted: muted,
-      achievements: [...unlockedAchievements]
+      achievements: [...unlockedAchievements],
+      achievementMeta
     };
     localStorage.setItem('freedomGameSave', JSON.stringify(data));
     storedHighScore = data.highScore || 0;
+    storedUnlockedWeapons = new Set(data.unlockedWeapons);
   } catch (e) {}
+}
+
+function unlockAchievement(ach) {
+  if (!ach || unlockedAchievements.has(ach.id)) return false;
+  unlockedAchievements.add(ach.id);
+  newAchievements.push(ach);
+  achievementMeta[ach.id] = {
+    unlockedAt: Date.now(),
+    wave,
+    score: player ? player.score : 0
+  };
+  return true;
+}
+
+function finalizeRunStats() {
+  if (!player) return;
+  player.stats.runTimeMs = Date.now() - runStartTime;
+  lastRunStats = {
+    score: player.score,
+    wave,
+    sats: player.stats.totalSats,
+    kills: player.stats.kills,
+    converts: player.stats.converts,
+    bossesKilled: player.stats.bossesKilled,
+    shotsFired: player.stats.shotsFired,
+    shotsHit: player.stats.shotsHit,
+    damageDealt: Math.round(player.stats.damageDealt),
+    elitesKilled: player.stats.elitesKilled || 0,
+    minibossesKilled: player.stats.minibossesKilled || 0,
+    bestCombo: player.stats.bestCombo || 0,
+    runTimeMs: player.stats.runTimeMs
+  };
+
+  lifetimeStats.totalSats += player.stats.totalSats;
+  lifetimeStats.totalConverts += player.stats.converts;
+  lifetimeStats.totalShotsFired += player.stats.shotsFired;
+  lifetimeStats.totalShotsHit += player.stats.shotsHit;
+  lifetimeStats.totalDamageDealt += Math.round(player.stats.damageDealt);
+  lifetimeStats.totalTimePlayed += player.stats.runTimeMs;
+  lifetimeStats.totalDeaths++;
+  lifetimeStats.bestWave = Math.max(lifetimeStats.bestWave || 0, wave);
+  lifetimeStats.bestScore = Math.max(lifetimeStats.bestScore || 0, player.score);
+  lifetimeStats.bestCombo = Math.max(lifetimeStats.bestCombo || 0, player.stats.bestCombo || 0);
+  lifetimeStats.totalElitesKilled += player.stats.elitesKilled || 0;
+  lifetimeStats.totalMinibossesKilled += player.stats.minibossesKilled || 0;
 }
 
 function checkAchievements() {
@@ -4760,8 +5073,7 @@ function checkAchievements() {
   for (const ach of ACHIEVEMENTS) {
     if (unlockedAchievements.has(ach.id)) continue;
     if (ach.check(player.stats, wave, player.unlockedWeapons, visitedBiomes)) {
-      unlockedAchievements.add(ach.id);
-      newAchievements.push(ach);
+      if (!unlockAchievement(ach)) continue;
       
       // Achievement rewards
       switch (ach.id) {
@@ -4913,6 +5225,47 @@ function spawnExplosion(x, y, count, color) {
     if (particles.length >= MAX_PARTICLES) break;
     particles.push(new Particle(x, y, color || COLORS.particle[randInt(0, COLORS.particle.length - 1)], rand(2, 5)));
   }
+}
+
+function applyRadialDamage(x, y, radius, damage, owner, options = {}) {
+  const {
+    color = '#fff',
+    particleCount = 12,
+    shake = 0,
+    sound = null,
+    damageFalloff = 0.55,
+    bossMultiplier = 0.75
+  } = options;
+
+  const validTargets = owner === 'player' || owner === 'ally'
+    ? [
+        ...enemies.filter(e => !e.converted && e.health > 0),
+        ...(boss && boss.alive && !boss.entering ? [boss] : [])
+      ]
+    : [player, ...allies.filter(a => a.alive)];
+
+  let hits = 0;
+  for (const target of validTargets) {
+    const d = Math.hypot(target.x - x, target.y - y);
+    const effectiveRadius = radius + (target.radius || 0);
+    if (d > effectiveRadius) continue;
+
+    if ((owner === 'player' || owner === 'ally') && target.hasShield && target.shieldHP > 0) {
+      target.shieldHP--;
+      spawnDamageNumber(target.x, target.y, 'BLOCKED!', '#2196f3');
+      hits++;
+      continue;
+    }
+
+    const falloff = Math.max(damageFalloff, 1 - d / Math.max(1, effectiveRadius));
+    target.takeDamage(damage * falloff * (target === boss ? bossMultiplier : 1), owner);
+    hits++;
+  }
+
+  spawnExplosion(x, y, particleCount, color);
+  if (shake > 0) triggerShake(shake, 180);
+  if (sound) playSound(sound);
+  return hits;
 }
 
 function getEnemyColorForType(type) {
@@ -5197,6 +5550,7 @@ function update(dt) {
 function updatePlaying(dt) {
   // Tutorial hints
   checkTutorialHints();
+  player.stats.runTimeMs += dt;
 
   // Player
   player.update(dt);
@@ -5394,7 +5748,19 @@ function updatePlaying(dt) {
     if (b.owner === 'player' || b.owner === 'ally') {
       // Hit boss
       if (boss && boss.alive && !boss.entering && circleCollision(b, boss)) {
-        boss.takeDamage(b.damage);
+        if (b.explosionRadius) {
+          const hits = applyRadialDamage(b.x, b.y, b.explosionRadius, b.splashDamage || b.damage, b.owner, {
+            color: b.impactColor || b.color,
+            particleCount: 18,
+            shake: 10,
+            sound: 'explosion',
+            bossMultiplier: 1
+          });
+          if (b.owner === 'player' && hits > 0) player.stats.shotsHit++;
+        } else {
+          boss.takeDamage(b.damage, b.owner);
+          if (b.owner === 'player') player.stats.shotsHit++;
+        }
         b.alive = false;
         return false;
       }
@@ -5405,12 +5771,23 @@ function updatePlaying(dt) {
       for (let i = 0; i < nearbyEnemies.length; i++) {
         const e = nearbyEnemies[i];
         if (!e.converted && e.health > 0 && circleCollision(b, e)) {
-          // Shield absorption
-          if (e.hasShield && e.shieldHP > 0) {
-            e.shieldHP--;
-            spawnDamageNumber(e.x, e.y, 'BLOCKED!', '#2196f3');
+          if (b.explosionRadius) {
+            const hits = applyRadialDamage(b.x, b.y, b.explosionRadius, b.splashDamage || b.damage, b.owner, {
+              color: b.impactColor || b.color,
+              particleCount: 18,
+              shake: 10,
+              sound: 'explosion'
+            });
+            if (b.owner === 'player' && hits > 0) player.stats.shotsHit++;
           } else {
-            e.takeDamage(b.damage);
+            // Shield absorption
+            if (e.hasShield && e.shieldHP > 0) {
+              e.shieldHP--;
+              spawnDamageNumber(e.x, e.y, 'BLOCKED!', '#2196f3');
+            } else {
+              e.takeDamage(b.damage, b.owner);
+              if (b.owner === 'player') player.stats.shotsHit++;
+            }
           }
           b.alive = false;
           return false;
@@ -5454,7 +5831,7 @@ function updatePlaying(dt) {
     for (let i = 0; i < nearbyEnemies.length; i++) {
       const e = nearbyEnemies[i];
       if (!e.converted && e.health > 0 && circleCollision(a, e)) {
-        e.takeDamage(5);
+        e.takeDamage(5, 'ally');
         a.takeDamage(e.damage);
       }
     }
@@ -5524,12 +5901,11 @@ function updatePlaying(dt) {
       comboCount = 0;
       comboMultiplier = 1;
     }
+    player.stats.bestCombo = Math.max(player.stats.bestCombo || 0, comboCount);
     // Check combo achievement
     if (comboCount >= 10 && !unlockedAchievements.has('combo10')) {
-      unlockedAchievements.add('combo10');
       const ach = ACHIEVEMENTS.find(a => a.id === 'combo10');
-      if (ach) {
-        newAchievements.push(ach);
+      if (ach && unlockAchievement(ach)) {
         waveAnnounceText = `🏆 ${ach.name}!`;
         waveAnnounceTimer = 2500;
       }
@@ -5555,6 +5931,7 @@ function updatePlaying(dt) {
     if (waveTimer <= 0) {
       // Grant XP for wave completion
       lifetimeStats.totalWaves++;
+      player.stats.wavesCompleted++;
       addXP(5 + wave); // More XP for later waves
       startWave();
       waveTimer = waveDelay;
@@ -5607,6 +5984,7 @@ function updatePlaying(dt) {
     if (player.score > player.highScore) {
       player.highScore = player.score;
     }
+    finalizeRunStats();
     saveGame();
     saveMetaProgression();
   }
@@ -5919,17 +6297,17 @@ function renderGameplay() {
   for (const lb of laserBeams) {
     const alpha = lb.life / lb.maxLife;
     ctx.globalAlpha = alpha;
-    ctx.strokeStyle = '#00e5ff';
-    ctx.lineWidth = 3;
-    ctx.shadowColor = '#00e5ff';
-    ctx.shadowBlur = 10;
+    ctx.strokeStyle = lb.color || '#00e5ff';
+    ctx.lineWidth = lb.width || 3;
+    ctx.shadowColor = lb.color || '#00e5ff';
+    ctx.shadowBlur = lb.glow || 10;
     ctx.beginPath();
     ctx.moveTo(lb.x1, lb.y1);
     ctx.lineTo(lb.x2, lb.y2);
     ctx.stroke();
     // Inner bright line
     ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 1;
+    ctx.lineWidth = lb.coreWidth || 1;
     ctx.beginPath();
     ctx.moveTo(lb.x1, lb.y1);
     ctx.lineTo(lb.x2, lb.y2);
@@ -6238,7 +6616,7 @@ function renderHUD() {
   ctx.font = 'bold 12px monospace';
   ctx.textAlign = 'center';
   const wepText = weaponNames[currentWep] || currentWep;
-  const ammoText = player.weaponAmmo[currentWep] !== undefined ? ` [${player.weaponAmmo[currentWep]}]` : ' [∞]';
+  const ammoText = currentWep === 'laser' || player.weaponAmmo[currentWep] === undefined ? ' [∞]' : ` [${player.weaponAmmo[currentWep]}]`;
   ctx.fillText(`${wepText}${ammoText}`, hudW / 2, hudH - 35);
 
   // Weapon slots hint
@@ -6904,6 +7282,8 @@ function renderTalents() {
   // Respec button
   const respecY = startY + tree.talents.length * spacing + 20;
   const respecSelected = talentSelection === tree.talents.length;
+  const respecCost = getRespecCost();
+  const respecLabel = respecCost > 0 ? `Respec (${respecCost} sats)` : 'Respec (Free)';
   ctx.fillStyle = respecConfirm ? '#f44336' : respecSelected ? '#777' : '#555';
   ctx.fillRect(GAME_W / 2 - 60, respecY, 120, 30);
   if (respecSelected) {
@@ -6914,7 +7294,7 @@ function renderTalents() {
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 12px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText(respecConfirm ? 'Click to confirm' : 'Respec (500 sats)', GAME_W / 2, respecY + 19);
+  ctx.fillText(respecConfirm ? 'Click to confirm' : respecLabel, GAME_W / 2, respecY + 19);
 
   const backRect = getTalentBackRect();
   const backSelected = talentSelection === tree.talents.length + 1;
@@ -6948,9 +7328,220 @@ function renderTalents() {
   }
 }
 
+function renderInfoPanel() {
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.88)';
+  ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+  const layout = getInfoPanelLayout();
+  const { compact, boxW, boxH, boxX, boxY, tabY, contentX, contentY, contentW, contentH } = layout;
+  const tabRects = getInfoPanelTabRects(layout);
+  const closeRect = getInfoPanelCloseRect(layout);
+
+  ctx.fillStyle = 'rgba(10, 12, 22, 0.97)';
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeStyle = COLORS.bitcoin;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+  ctx.fillStyle = COLORS.bitcoin;
+  ctx.font = 'bold 22px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('v0.2.0 META HUB', GAME_W / 2, boxY + 30);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  ctx.fillRect(closeRect.x, closeRect.y, closeRect.w, closeRect.h);
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(closeRect.x, closeRect.y, closeRect.w, closeRect.h);
+  ctx.fillStyle = COLORS.text;
+  ctx.font = 'bold 11px monospace';
+  ctx.fillText('CLOSE', closeRect.x + closeRect.w / 2, closeRect.y + 16);
+
+  INFO_TABS.forEach((tab, i) => {
+    const tabRect = tabRects[i];
+    const selected = infoPanelTab === i;
+    ctx.fillStyle = selected ? 'rgba(247, 147, 26, 0.2)' : 'rgba(255,255,255,0.06)';
+    ctx.fillRect(tabRect.x, tabRect.y, tabRect.w, tabRect.h);
+    ctx.strokeStyle = selected ? COLORS.bitcoin : '#555';
+    ctx.lineWidth = selected ? 2 : 1;
+    ctx.strokeRect(tabRect.x, tabRect.y, tabRect.w, tabRect.h);
+    ctx.fillStyle = selected ? COLORS.textBright : COLORS.textDim;
+    ctx.font = selected ? 'bold 13px monospace' : '12px monospace';
+    ctx.fillText(tab.label.toUpperCase(), tabRect.x + tabRect.w / 2, tabRect.y + 21);
+  });
+
+  ctx.fillStyle = 'rgba(255,255,255,0.03)';
+  ctx.fillRect(contentX, contentY, contentW, contentH);
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(contentX, contentY, contentW, contentH);
+
+  const tabKey = INFO_TABS[infoPanelTab].key;
+  if (tabKey === 'tutorial') {
+    const cols = compact ? 2 : 3;
+    const cardGap = 14;
+    const cardW = Math.floor((contentW - cardGap * (cols + 1)) / cols);
+    const cardH = compact ? 118 : 146;
+    TUTORIAL_PAGES.forEach((page, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const x = contentX + cardGap + col * (cardW + cardGap);
+      const y = contentY + 14 + row * (cardH + 10);
+      ctx.fillStyle = 'rgba(255,255,255,0.04)';
+      ctx.fillRect(x, y, cardW, cardH);
+      ctx.strokeStyle = page.color;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y, cardW, cardH);
+      ctx.fillStyle = page.color;
+      ctx.font = 'bold 14px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(page.title, x + 12, y + 20);
+      ctx.fillStyle = COLORS.text;
+      ctx.font = compact ? '10px monospace' : '11px monospace';
+      let lineY = y + 42;
+      for (const line of page.lines) {
+        const wrapped = wrapTextLines(`- ${line}`, cardW - 24);
+        for (const wrappedLine of wrapped) {
+          ctx.fillText(wrappedLine, x + 12, lineY);
+          lineY += compact ? 13 : 15;
+        }
+        lineY += 2;
+      }
+    });
+  } else if (tabKey === 'achievements') {
+    const cols = 4;
+    const gap = 12;
+    const cardW = Math.floor((contentW - gap * (cols + 1)) / cols);
+    const cardH = 78;
+    ctx.fillStyle = COLORS.textDim;
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(`Unlocked ${unlockedAchievements.size}/${ACHIEVEMENTS.length}`, contentX + contentW - 12, contentY + 18);
+
+    ACHIEVEMENTS.forEach((ach, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const x = contentX + gap + col * (cardW + gap);
+      const y = contentY + 28 + row * (cardH + 8);
+      const unlocked = unlockedAchievements.has(ach.id);
+      ctx.fillStyle = unlocked ? 'rgba(76, 175, 80, 0.12)' : 'rgba(255,255,255,0.03)';
+      ctx.fillRect(x, y, cardW, cardH);
+      ctx.strokeStyle = unlocked ? '#4caf50' : '#444';
+      ctx.lineWidth = unlocked ? 2 : 1;
+      ctx.strokeRect(x, y, cardW, cardH);
+      ctx.fillStyle = unlocked ? '#fff' : '#777';
+      ctx.font = 'bold 20px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(unlocked ? ach.icon : '?', x + 12, y + 24);
+      ctx.font = 'bold 12px monospace';
+      ctx.fillStyle = unlocked ? COLORS.textBright : COLORS.text;
+      const nameLines = wrapTextLines(ach.name, cardW - 56);
+      ctx.fillText(nameLines[0], x + 44, y + 18);
+      ctx.fillStyle = COLORS.textDim;
+      ctx.font = '10px monospace';
+      const descLines = wrapTextLines(ach.desc, cardW - 56).slice(0, 2);
+      descLines.forEach((line, idx) => {
+        ctx.fillText(line, x + 44, y + 32 + idx * 11);
+      });
+      const meta = achievementMeta[ach.id];
+      const status = unlocked
+        ? `Unlocked${meta && meta.wave ? ` at W${meta.wave}` : ''}`
+        : getAchievementProgress(ach);
+      ctx.fillStyle = unlocked ? '#81c784' : '#ffcc80';
+      ctx.fillText(status, x + 44, y + 67);
+    });
+  } else {
+    const accuracy = lifetimeStats.totalShotsFired > 0
+      ? Math.round((lifetimeStats.totalShotsHit / lifetimeStats.totalShotsFired) * 100)
+      : 0;
+    const lastAccuracy = lastRunStats && lastRunStats.shotsFired > 0
+      ? Math.round((lastRunStats.shotsHit / lastRunStats.shotsFired) * 100)
+      : 0;
+    const colW = Math.floor((contentW - 36) / 2);
+    const leftX = contentX + 12;
+    const rightX = leftX + colW + 12;
+
+    const drawStatBlock = (title, x, y, w, lines, accent) => {
+      ctx.fillStyle = 'rgba(255,255,255,0.04)';
+      ctx.fillRect(x, y, w, 224);
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y, w, 224);
+      ctx.fillStyle = accent;
+      ctx.font = 'bold 14px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(title, x + 12, y + 20);
+      ctx.fillStyle = COLORS.text;
+      ctx.font = '11px monospace';
+      lines.forEach((line, idx) => {
+        ctx.fillText(line, x + 12, y + 44 + idx * 15);
+      });
+    };
+
+    drawStatBlock('Lifetime', leftX, contentY + 14, colW, [
+      `Runs Started: ${lifetimeStats.totalRuns}`,
+      `Deaths: ${lifetimeStats.totalDeaths}`,
+      `Best Score: ${lifetimeStats.bestScore || 0}`,
+      `Best Wave: ${lifetimeStats.bestWave || 0}`,
+      `Best Combo: ${lifetimeStats.bestCombo || 0}`,
+      `Kills: ${lifetimeStats.totalKills}`,
+      `Bosses: ${lifetimeStats.totalBosses}`,
+      `Converts: ${lifetimeStats.totalConverts}`,
+      `Sats: ${lifetimeStats.totalSats}`,
+      `Damage: ${Math.round(lifetimeStats.totalDamageDealt || 0)}`,
+      `Accuracy: ${accuracy}%`,
+      `Play Time: ${formatDuration(lifetimeStats.totalTimePlayed || 0)}`
+    ], '#4dd0e1');
+
+    drawStatBlock('Last Run', rightX, contentY + 14, colW, lastRunStats ? [
+      `Score: ${lastRunStats.score}`,
+      `Wave: ${lastRunStats.wave}`,
+      `Kills: ${lastRunStats.kills}`,
+      `Bosses: ${lastRunStats.bossesKilled}`,
+      `Converts: ${lastRunStats.converts}`,
+      `Sats: ${lastRunStats.sats}`,
+      `Damage: ${lastRunStats.damageDealt}`,
+      `Shots Fired: ${lastRunStats.shotsFired}`,
+      `Accuracy: ${lastAccuracy}%`,
+      `Best Combo: ${lastRunStats.bestCombo}`,
+      `Elites: ${lastRunStats.elitesKilled}`,
+      `Time: ${formatDuration(lastRunStats.runTimeMs)}`
+    ] : [
+      'No completed run saved yet.',
+      'Start a run and finish it to populate this panel.'
+    ], '#ffb74d');
+
+    ctx.fillStyle = 'rgba(255,255,255,0.04)';
+    ctx.fillRect(contentX + 12, contentY + 254, contentW - 24, contentH - 268);
+    ctx.strokeStyle = '#9c27b0';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(contentX + 12, contentY + 254, contentW - 24, contentH - 268);
+    ctx.fillStyle = '#ce93d8';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText('Weapon Mastery', contentX + 24, contentY + 276);
+
+    const masteryEntries = Object.entries(weaponMastery);
+    masteryEntries.forEach(([weapon, value], i) => {
+      const col = i % 3;
+      const row = Math.floor(i / 3);
+      const x = contentX + 24 + col * 240;
+      const y = contentY + 302 + row * 24;
+      ctx.fillStyle = COLORS.text;
+      ctx.font = '12px monospace';
+      ctx.fillText(`${weapon.toUpperCase()}: ${value}`, x, y);
+    });
+  }
+
+  ctx.fillStyle = COLORS.textDim;
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('Left/Right or LB/RB switch tabs | ESC/B closes | Click tab headers to jump', GAME_W / 2, boxY + boxH - 16);
+}
+
 function renderStartScreen() {
   const layout = getStartScreenLayout();
   const buttonRects = getStartScreenButtonRects(layout);
+  const metaRect = getStartScreenMetaRect(layout);
   // Animated particle background
   updateStartParticles();
   drawStartParticles();
@@ -6973,10 +7564,17 @@ function renderStartScreen() {
   ctx.fillText('Bitcoin & Lightning Network are the alternative', GAME_W / 2, layout.subtitleY + 18);
 
   // Meta progression display (below subtitle, above controls)
-  const metaW = layout.compact ? 272 : 240;
-  const metaH = layout.compact ? 58 : 55;
-  const metaX = GAME_W / 2 - metaW / 2;
-  const metaY = layout.metaY;
+  const metaW = metaRect.w;
+  const metaH = metaRect.h;
+  const metaX = metaRect.x;
+  const metaY = metaRect.y;
+  const usingGamepad = isGamepadUiPreferred();
+  const controllerConnectedNeedsUnlock =
+    gamepadState.connected &&
+    !muted &&
+    (!audioCtx || audioCtx.state !== 'running') &&
+    !hasStickyUserActivation();
+  const showControllerStartupUi = usingGamepad || controllerConnectedNeedsUnlock;
   ctx.fillStyle = 'rgba(13, 13, 26, 0.8)';
   ctx.fillRect(metaX, metaY, metaW, metaH);
   ctx.strokeStyle = '#9c27b0';
@@ -7012,13 +7610,6 @@ function renderStartScreen() {
 
   ctx.fillStyle = COLORS.text;
   ctx.font = layout.compact ? '11px monospace' : '12px monospace';
-  const usingGamepad = isGamepadUiPreferred();
-  const controllerConnectedNeedsUnlock =
-    gamepadState.connected &&
-    !muted &&
-    (!audioCtx || audioCtx.state !== 'running') &&
-    !hasStickyUserActivation();
-  const showControllerStartupUi = usingGamepad || controllerConnectedNeedsUnlock;
   const lines = [
     showControllerStartupUi ? [
       makeControllerLabelToken('LS'),
@@ -7165,6 +7756,13 @@ function renderStartScreen() {
     ctx.fillText(`★ High Score: ${storedHighScore} ★`, GAME_W / 2, layout.highScoreY);
   }
 
+  ctx.fillStyle = '#b39ddb';
+  ctx.font = '10px monospace';
+  const metaHint = showControllerStartupUi
+    ? 'Meta Hub: click level panel or use LB/RB'
+    : 'Meta Hub: click level panel or press T / G / I';
+  ctx.fillText(metaHint, GAME_W / 2, layout.highScoreY + 16);
+
   // Bitcoin decoration
   ctx.fillStyle = COLORS.bitcoin;
   ctx.font = layout.compact ? '38px monospace' : '48px monospace';
@@ -7219,18 +7817,20 @@ function renderGameOver() {
   ctx.fillStyle = COLORS.textDim;
   ctx.font = '13px monospace';
   ctx.fillText(`Kills: ${player.stats.kills} | Converts: ${player.stats.converts}`, GAME_W / 2, GAME_H / 2 + 65);
-  ctx.fillText(`Shots Fired: ${player.stats.shotsFired}`, GAME_W / 2, GAME_H / 2 + 82);
+  const runAccuracy = player.stats.shotsFired > 0 ? Math.round((player.stats.shotsHit / player.stats.shotsFired) * 100) : 0;
+  ctx.fillText(`Damage: ${Math.round(player.stats.damageDealt)} | Best Combo: ${player.stats.bestCombo || 0}`, GAME_W / 2, GAME_H / 2 + 82);
+  ctx.fillText(`Shots: ${player.stats.shotsFired} | Accuracy: ${runAccuracy}% | Time: ${formatDuration(player.stats.runTimeMs)}`, GAME_W / 2, GAME_H / 2 + 99);
 
   // High score
   ctx.fillStyle = COLORS.bitcoin;
   ctx.font = 'bold 16px monospace';
-  ctx.fillText(`★ High Score: ${player.highScore} ★`, GAME_W / 2, GAME_H / 2 + 110);
+  ctx.fillText(`★ High Score: ${player.highScore} ★`, GAME_W / 2, GAME_H / 2 + 126);
 
   // Achievements
   if (unlockedAchievements.size > 0) {
     ctx.fillStyle = COLORS.textDim;
     ctx.font = '11px monospace';
-    ctx.fillText(`Achievements: ${unlockedAchievements.size}/${ACHIEVEMENTS.length}`, GAME_W / 2, GAME_H / 2 + 130);
+    ctx.fillText(`Achievements: ${unlockedAchievements.size}/${ACHIEVEMENTS.length}`, GAME_W / 2, GAME_H / 2 + 144);
   }
 
   // Daily challenge score
@@ -7239,7 +7839,7 @@ function renderGameOver() {
     saveDailyScore();
     ctx.fillStyle = '#ff9800';
     ctx.font = 'bold 14px monospace';
-    ctx.fillText(`Daily Challenge: ${player.score} (Best: ${dailyHighScore})`, GAME_W / 2, GAME_H / 2 + 148);
+    ctx.fillText(`Daily Challenge: ${player.score} (Best: ${dailyHighScore})`, GAME_W / 2, GAME_H / 2 + 162);
   }
 
   // Restart
@@ -7257,11 +7857,11 @@ function renderGameOver() {
         makeControllerTextToken(' TO RESTART ]', COLORS.bitcoin)
       ],
       GAME_W / 2,
-      GAME_H / 2 + 150,
+      GAME_H / 2 + 182,
       { align: 'center', font: 'bold 20px monospace', textColor: COLORS.bitcoin, badgeHeight: 20, gap: 4 }
     );
   } else {
-    ctx.fillText(touchControlsEnabled ? '[ TAP TO RESTART ]' : '[ CLICK TO RESTART ]', GAME_W / 2, GAME_H / 2 + 150);
+    ctx.fillText(touchControlsEnabled ? '[ TAP TO RESTART ]' : '[ CLICK TO RESTART ]', GAME_W / 2, GAME_H / 2 + 182);
   }
   ctx.globalAlpha = 1;
 
@@ -7435,7 +8035,40 @@ function gameLoop(timestamp) {
   pollGamepadInput();
   handleControllerRemapping();
 
-  if (gameState === 'start' && !talentsOpen && !keybindsOpen && !controllerSettingsOpen && !settingsOpen) {
+  if (gameState === 'start' && infoPanelOpen && !talentsOpen && !keybindsOpen && !controllerSettingsOpen && !settingsOpen) {
+    if (keys['a'] || keys['arrowleft'] || gamepadState.menuLeftPressed || gamepadState.prevWeaponPressed) {
+      infoPanelTab = (infoPanelTab - 1 + INFO_TABS.length) % INFO_TABS.length;
+      keys['a'] = false;
+      keys['arrowleft'] = false;
+    }
+    if (keys['d'] || keys['arrowright'] || gamepadState.menuRightPressed || gamepadState.nextWeaponPressed) {
+      infoPanelTab = (infoPanelTab + 1) % INFO_TABS.length;
+      keys['d'] = false;
+      keys['arrowright'] = false;
+    }
+    if (keys['escape'] || gamepadState.backPressed) {
+      infoPanelOpen = false;
+      keys['escape'] = false;
+    }
+    if (mouse.clicked) {
+      const point = { x: mouse.x, y: mouse.y };
+      const layout = getInfoPanelLayout();
+      const closeRect = getInfoPanelCloseRect(layout);
+      const tabRects = getInfoPanelTabRects(layout);
+      if (pointInRect(point, closeRect)) {
+        infoPanelOpen = false;
+      } else {
+        for (let i = 0; i < tabRects.length; i++) {
+          if (pointInRect(point, tabRects[i])) {
+            infoPanelTab = i;
+            break;
+          }
+        }
+      }
+      mouse.clicked = false;
+      mouse.down = false;
+    }
+  } else if (gameState === 'start' && !talentsOpen && !keybindsOpen && !controllerSettingsOpen && !settingsOpen) {
     if (gamepadState.settingsPressed) {
       if (blockStartScreenGamepadActionUntilAudioUnlock('settings')) {
         settingsOpen = false;
@@ -7454,6 +8087,12 @@ function gameLoop(timestamp) {
         dailyMode = false;
         startDailyChallenge();
       }
+    } else if (gamepadState.prevWeaponPressed) {
+      infoPanelOpen = true;
+      infoPanelTab = (infoPanelTab - 1 + INFO_TABS.length) % INFO_TABS.length;
+    } else if (gamepadState.nextWeaponPressed) {
+      infoPanelOpen = true;
+      infoPanelTab = (infoPanelTab + 1) % INFO_TABS.length;
     } else if (gamepadState.confirmPressed || gamepadState.pausePressed) {
       if (!blockStartScreenGamepadActionUntilAudioUnlock('start')) {
         requestAudioResume('gamepad');
@@ -7464,10 +8103,14 @@ function gameLoop(timestamp) {
   }
 
   // Handle start screen clicks in game loop (single point of truth)
-  if (gameState === 'start' && mouse.clicked && !talentsOpen && !keybindsOpen && !controllerSettingsOpen && !settingsOpen) {
+  if (gameState === 'start' && mouse.clicked && !infoPanelOpen && !talentsOpen && !keybindsOpen && !controllerSettingsOpen && !settingsOpen) {
     const point = { x: mouse.x, y: mouse.y };
     const buttons = getStartScreenButtonRects();
-    if (pointInRect(point, buttons.settings)) {
+    const metaRect = getStartScreenMetaRect();
+    if (pointInRect(point, metaRect)) {
+      infoPanelOpen = true;
+      infoPanelTab = 2;
+    } else if (pointInRect(point, buttons.settings)) {
       settingsOpen = !settingsOpen;
       settingsSelection = 0;
     } else if (pointInRect(point, buttons.daily)) {
@@ -7485,6 +8128,24 @@ function gameLoop(timestamp) {
     settingsOpen = !settingsOpen;
     settingsSelection = 0;
     keys['p'] = false;
+  }
+
+  if (gameState === 'start' && !settingsOpen && !controllerSettingsOpen && !keybindsOpen && !talentsOpen) {
+    if (keys['t']) {
+      infoPanelOpen = true;
+      infoPanelTab = 0;
+      keys['t'] = false;
+    }
+    if (keys['g']) {
+      infoPanelOpen = true;
+      infoPanelTab = 1;
+      keys['g'] = false;
+    }
+    if (keys['i']) {
+      infoPanelOpen = true;
+      infoPanelTab = 2;
+      keys['i'] = false;
+    }
   }
 
   // Daily challenge (keyboard fallback)
@@ -7789,10 +8450,11 @@ function gameLoop(timestamp) {
         }
       } else if (talentSelection === tree.talents.length) {
         if (respecConfirm) {
-          if (player.sats >= 500) {
-            player.sats -= 500;
-            respecTalents();
+          if (tryRespecTalents()) {
             respecConfirm = false;
+          } else {
+            waveAnnounceText = `★ Need ${getRespecCost()} sats to respec!`;
+            waveAnnounceTimer = 1500;
           }
         } else {
           respecConfirm = true;
@@ -7822,10 +8484,11 @@ function gameLoop(timestamp) {
       } else if (mx > GAME_W / 2 - 60 && mx < GAME_W / 2 + 60 && my > respecY && my < respecY + 30) {
         talentSelection = tree.talents.length;
         if (respecConfirm) {
-          if (player.sats >= 500) {
-            player.sats -= 500;
-            respecTalents();
+          if (tryRespecTalents()) {
             respecConfirm = false;
+          } else {
+            waveAnnounceText = `★ Need ${getRespecCost()} sats to respec!`;
+            waveAnnounceTimer = 1500;
           }
         } else {
           respecConfirm = true;
@@ -7881,6 +8544,8 @@ function gameLoop(timestamp) {
     renderControllerSettings();
   } else if (settingsOpen) {
     renderSettings();
+  } else if (infoPanelOpen && gameState === 'start') {
+    renderInfoPanel();
   }
 
   if (!talentsOpen) {

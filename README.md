@@ -4,7 +4,7 @@
 
 # 🎮 Freedom Fighters vs War Mongers
 
-[![Version](https://img.shields.io/badge/version-v0.1.9-blue?style=for-the-badge)](#)
+[![Version](https://img.shields.io/badge/version-v0.2.0-blue?style=for-the-badge)](#)
 [![License](https://img.shields.io/badge/license-Open-green?style=for-the-badge)](#)
 [![Size](https://img.shields.io/badge/single--file-100%25-orange?style=for-the-badge)](#)
 [![PWA](https://img.shields.io/badge/PWA-Installable-purple?style=for-the-badge)](#)
@@ -46,6 +46,7 @@ Fight through endless waves of enemies, face devastating bosses, unlock powerful
 - 🏆 **Achievements** — Unlockable milestones with persistent tracking
 - 📅 **Daily Challenge** — Unique daily runs for bonus rewards
 - 🎨 **Skins & Meta Progression** — Persistent XP, levels, and cosmetic unlocks
+- 🧭 **Meta Hub** — Start-screen tutorial, achievement gallery, lifetime stats, and last-run tracking
 
 </details>
 
@@ -134,6 +135,7 @@ http://<your-lan-ip>:8080
 | `ESC` | Pause |
 | `P` | Settings |
 | `J` | Daily challenge (start screen) |
+| `T` / `G` / `I` | Open Meta Hub tabs on the start screen |
 
 ### Touch
 
@@ -157,7 +159,15 @@ http://<your-lan-ip>:8080
 | `LB / RB` | Switch weapons |
 | `Start` | Pause |
 
-> Controller notes: the start screen includes a dedicated controller menu for remapping, vibration toggle, rumble strength, and test rumble. On Android/Chrome, touch overlays hide while controller input is active and come back when touch is used again.
+> Controller notes: the start screen includes a dedicated controller menu for remapping, vibration toggle, rumble strength, and test rumble. `LB / RB` also open and switch Meta Hub tabs on the start screen. On Android/Chrome, touch overlays hide while controller input is active and come back when touch is used again.
+
+### Meta Hub
+
+The start screen now includes a `v0.2.0` Meta Hub. Open it by clicking the level/meta panel or pressing `T`, `G`, or `I`.
+
+- **Tutorial** — Card-based onboarding for controls, combat loop, boss reads, weapons, and progression
+- **Achievements** — Persistent gallery with locked states, descriptions, and unlock status
+- **Stats** — Lifetime totals, last completed run summary, and weapon mastery tracking
 
 ---
 
@@ -198,6 +208,7 @@ freedom-game/
    - [ ] Open settings, toggle brightness/UI scale
    - [ ] Test keybind hints and touch controls
    - [ ] Open keybinds and talents from settings
+   - [ ] Open the Meta Hub (`T` / `G` / `I`) and verify all three tabs render cleanly
 
 3. **Touch/Mobile:**
    - [ ] Open LAN URL on Android (Chrome recommended)
@@ -215,6 +226,7 @@ freedom-game/
 5. **Persistence:**
    - [ ] Change settings → reload page → verify they persist
    - [ ] Verify high score persists across sessions
+   - [ ] Verify achievements, Meta Hub stats, and last-run summary persist across reloads
 
 ---
 
@@ -254,7 +266,7 @@ node --check temp.js
 
 ## 🗺️ Roadmap
 
-### Completed (v0.1.9) ✅
+### Completed (v0.2.0) ✅
 
 - [x] Settings: brightness, UI scale, keybind hints, touch controls
 - [x] Touch gameplay with dual-stick controls + aim assist
