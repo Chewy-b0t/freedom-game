@@ -1954,7 +1954,7 @@ class Player {
       case 'homing':
         if (this.weaponAmmo.homing <= 0) { this.removeWeaponFromLoadout('homing'); return; }
         this.weaponAmmo.homing--;
-        this.fireRate = 500;
+        this.fireRate = 420;
         // Find nearest enemy
         let nearest = null;
         let nearDist = 300;
@@ -1972,22 +1972,35 @@ class Player {
         const hb = new Bullet(
           this.x + Math.cos(a) * 18,
           this.y + Math.sin(a) * 18,
-          Math.cos(a) * 4.5,
-          Math.sin(a) * 4.5,
-          finalDmg * 2.2,
+          Math.cos(a) * 5.4,
+          Math.sin(a) * 5.4,
+          finalDmg * 3.1,
           'player',
           '#e040fb'
         );
         hb.homing = true;
         hb.target = target;
-        hb.turnSpeed = 0.14;
-        hb.acceleration = 1.015;
-        hb.maxSpeed = 8;
-        hb.radius = 6;
-        hb.explosionRadius = 90;
-        hb.splashDamage = finalDmg * 1.7;
+        hb.turnSpeed = 0.22;
+        hb.acceleration = 1.03;
+        hb.maxSpeed = 10.5;
+        hb.radius = 7;
+        hb.explosionRadius = 120;
+        hb.splashDamage = finalDmg * 2.6;
         hb.impactColor = '#ff5cff';
+        hb.impactParticleCount = 30;
+        hb.impactShake = 15;
+        hb.trailColor = '#ff7bff';
+        hb.trailTimer = 0;
+        hb.drawMissile = true;
         bullets.push(hb);
+        for (let i = 0; i < 8; i++) {
+          particles.push(new Particle(
+            hb.x - Math.cos(a) * rand(2, 10),
+            hb.y - Math.sin(a) * rand(2, 10),
+            i % 2 === 0 ? '#ff5cff' : '#ff9800',
+            rand(2, 4)
+          ));
+        }
         this.lastShot = now;
         playSound('shoot');
         player.stats.shotsFired++;
@@ -2808,10 +2821,21 @@ class Bullet {
       this.vx *= this.acceleration;
       this.vy *= this.acceleration;
       const speed = Math.hypot(this.vx, this.vy);
-      if (this.maxSpeed && speed > this.maxSpeed) {
+    if (this.maxSpeed && speed > this.maxSpeed) {
         const scale = this.maxSpeed / speed;
         this.vx *= scale;
         this.vy *= scale;
+      }
+    }
+    if (this.homing && this.trailColor) {
+      this.trailTimer = (this.trailTimer || 0) + 1;
+      if (this.trailTimer % 2 === 0) {
+        particles.push(new Particle(
+          this.x - this.vx * 0.6,
+          this.y - this.vy * 0.6,
+          Math.random() < 0.7 ? this.trailColor : '#ff9800',
+          rand(2, 4)
+        ));
       }
     }
     this.x += this.vx;
@@ -2824,6 +2848,32 @@ class Bullet {
 
   draw() {
     ctx.save();
+    if (this.drawMissile) {
+      const a = Math.atan2(this.vy, this.vx);
+      ctx.translate(this.x, this.y);
+      ctx.rotate(a);
+      ctx.shadowColor = this.color;
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = this.color;
+      ctx.beginPath();
+      ctx.moveTo(10, 0);
+      ctx.lineTo(-6, -5);
+      ctx.lineTo(-2, 0);
+      ctx.lineTo(-6, 5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(-1, -1.5, 5, 3);
+      ctx.fillStyle = '#ff9800';
+      ctx.beginPath();
+      ctx.moveTo(-6, -3);
+      ctx.lineTo(-12, 0);
+      ctx.lineTo(-6, 3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
     ctx.shadowColor = this.color;
     ctx.shadowBlur = 6;
     ctx.fillStyle = this.color;
@@ -5585,6 +5635,9 @@ function updatePlaying(dt) {
   if (player.weapons[player.currentWeapon] === 'railgun') {
     if (isPrimaryShootHeld()) {
       player.railChargeTime = (player.railChargeTime || 0) + 16;
+      if (player.railChargeTime >= 1000 && Date.now() - player.lastShot > 120) {
+        player.fireRailgun();
+      }
     } else if (player.railChargeTime > 0) {
       player.fireRailgun();
     }
@@ -5751,8 +5804,8 @@ function updatePlaying(dt) {
         if (b.explosionRadius) {
           const hits = applyRadialDamage(b.x, b.y, b.explosionRadius, b.splashDamage || b.damage, b.owner, {
             color: b.impactColor || b.color,
-            particleCount: 18,
-            shake: 10,
+            particleCount: b.impactParticleCount || 18,
+            shake: b.impactShake || 10,
             sound: 'explosion',
             bossMultiplier: 1
           });
@@ -5774,8 +5827,8 @@ function updatePlaying(dt) {
           if (b.explosionRadius) {
             const hits = applyRadialDamage(b.x, b.y, b.explosionRadius, b.splashDamage || b.damage, b.owner, {
               color: b.impactColor || b.color,
-              particleCount: 18,
-              shake: 10,
+              particleCount: b.impactParticleCount || 18,
+              shake: b.impactShake || 10,
               sound: 'explosion'
             });
             if (b.owner === 'player' && hits > 0) player.stats.shotsHit++;
