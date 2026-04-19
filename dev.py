@@ -57,13 +57,18 @@ RELOAD_SCRIPT = b'''
 '''
 
 class DevHandler(http.server.SimpleHTTPRequestHandler):
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
     def do_GET(self):
         path = urlparse(self.path).path
 
         if path == "/__dev/hash":
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")
-            self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             h = get_file_hash()
             self.wfile.write((h or "none").encode())
@@ -77,7 +82,6 @@ class DevHandler(http.server.SimpleHTTPRequestHandler):
                     content = content.replace(b"</body>", RELOAD_SCRIPT)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
-                self.send_header("Cache-Control", "no-cache, no-store")
                 self.send_header("Content-Length", str(len(content)))
                 self.end_headers()
                 self.wfile.write(content)

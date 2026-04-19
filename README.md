@@ -26,6 +26,13 @@ Fight through endless waves of enemies, face devastating bosses, unlock powerful
 
 ---
 
+## Most Important
+
+- Cross-compatibility is a top priority
+- Gameplay must stay fast and smooth no matter what
+
+---
+
 ## ✨ Features
 
 <details>
@@ -135,6 +142,22 @@ http://<your-lan-ip>:8080
 | **Left side drag** | Movement stick |
 | **Right side drag/tap** | Aim & shoot |
 | **On-screen buttons** | WAKE / SHOP / PAUSE |
+
+### Controller
+
+| Control | Action |
+|---------|--------|
+| **Left stick / D-pad** | Move |
+| **Right stick** | Aim + shoot |
+| **Triggers** | Also shoot |
+| `A` | Confirm / start / open nearby shop |
+| `B` | Back |
+| `X` | Convert / settings |
+| `Y` | Daily challenge / alt shop |
+| `LB / RB` | Switch weapons |
+| `Start` | Pause |
+
+> Controller notes: the start screen includes a dedicated controller menu for remapping, vibration toggle, rumble strength, and test rumble. On Android/Chrome, touch overlays hide while controller input is active and come back when touch is used again.
 
 ---
 

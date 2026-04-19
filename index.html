@@ -94,7 +94,12 @@ if ('serviceWorker' in navigator) {
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const prefersCoarsePointer = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
-let fullscreenRequested = false;
+const isFirefoxBrowser = /\bfirefox\b/i.test(navigator.userAgent) && !/\bseamonkey\b/i.test(navigator.userAgent);
+let fullscreenRequestInFlight = false;
+let controllerFullscreenPromptVisible = false;
+let audioUnlockPromptVisible = false;
+let audioUnlockPromptSource = '';
+let audioUnlockListenersInstalled = false;
 
 function isStandaloneDisplay() {
   return window.matchMedia('(display-mode: standalone)').matches ||
@@ -102,24 +107,59 @@ function isStandaloneDisplay() {
     navigator.standalone === true;
 }
 
-function tryEnterFullscreen() {
-  if (fullscreenRequested || isStandaloneDisplay()) return;
+function isFullscreenDisplayActive() {
+  return isStandaloneDisplay() ||
+    !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
+}
+
+function syncFullscreenRequestState() {
+  fullscreenRequestInFlight = false;
+  if (isFullscreenDisplayActive()) controllerFullscreenPromptVisible = false;
+}
+
+document.addEventListener('fullscreenchange', syncFullscreenRequestState);
+document.addEventListener('webkitfullscreenchange', syncFullscreenRequestState);
+document.addEventListener('MSFullscreenChange', syncFullscreenRequestState);
+
+function tryEnterFullscreen(source = 'pointer') {
+  if (fullscreenRequestInFlight || isFullscreenDisplayActive()) {
+    if (isFullscreenDisplayActive()) controllerFullscreenPromptVisible = false;
+    return false;
+  }
   const target = document.documentElement;
   const request = target.requestFullscreen ||
     target.webkitRequestFullscreen ||
     target.msRequestFullscreen;
-  if (!request) return;
-  fullscreenRequested = true;
+  if (!request) return false;
+  fullscreenRequestInFlight = true;
   try {
-    const result = request.call(target, { navigationUI: 'hide' });
-    if (result && typeof result.catch === 'function') {
-      result.catch(() => {
-        fullscreenRequested = false;
+    let result;
+    try {
+      result = request.call(target, { navigationUI: 'hide' });
+    } catch (optionError) {
+      result = request.call(target);
+    }
+    if (result && typeof result.then === 'function') {
+      result.then(() => {
+        controllerFullscreenPromptVisible = false;
+      }).catch(() => {
+        if (source === 'gamepad' && !isFullscreenDisplayActive()) {
+          controllerFullscreenPromptVisible = true;
+        }
+      }).finally(() => {
+        fullscreenRequestInFlight = false;
       });
+    } else {
+      fullscreenRequestInFlight = false;
+      if (isFullscreenDisplayActive()) controllerFullscreenPromptVisible = false;
     }
   } catch (e) {
-    fullscreenRequested = false;
+    fullscreenRequestInFlight = false;
+    if (source === 'gamepad' && !isFullscreenDisplayActive()) {
+      controllerFullscreenPromptVisible = true;
+    }
   }
+  return true;
 }
 
 // --- Canvas sizing ---
@@ -131,11 +171,196 @@ canvas.height = GAME_H;
 // --- Sound System (Web Audio API, no files needed) ---
 const AudioCtx = window.AudioContext || window.webkitAudioContext;
 let audioCtx;
-function ensureAudio() { if (!audioCtx) audioCtx = new AudioCtx(); }
+let audioResumePromise = null;
+let audioUnlockChimePlayed = false;
+let pendingStartScreenAction = '';
+function hasStickyUserActivation() {
+  return !navigator.userActivation || navigator.userActivation.hasBeenActive === true;
+}
+function hideAudioUnlockPrompt() {
+  audioUnlockPromptVisible = false;
+  audioUnlockPromptSource = '';
+}
+function showAudioUnlockPrompt(source = 'generic') {
+  if (muted) return;
+  if (audioCtx && audioCtx.state === 'running') {
+    hideAudioUnlockPrompt();
+    return;
+  }
+  audioUnlockPromptVisible = true;
+  audioUnlockPromptSource = source;
+}
+function hasPendingAudioUnlock() {
+  return !muted && audioUnlockPromptVisible && (!audioCtx || audioCtx.state !== 'running');
+}
+function getAudioUnlockPromptText() {
+  if (audioUnlockPromptSource === 'gamepad') {
+    if (isFirefoxBrowser) {
+      return 'Firefox needs one click, tap, or key press for sound';
+    }
+    return 'Browser needs one click, tap, or key press for sound';
+  }
+  return 'Click, tap, or press any key once to enable audio';
+}
+function syncAudioUnlockPrompt() {
+  if (!audioCtx || muted || audioCtx.state === 'running') hideAudioUnlockPrompt();
+}
+function ensureAudio() {
+  if (!audioCtx && AudioCtx) {
+    audioCtx = new AudioCtx();
+    if (audioCtx.addEventListener) audioCtx.addEventListener('statechange', syncAudioUnlockPrompt);
+  }
+  return audioCtx;
+}
+
+function getAudioRuntimeStatus() {
+  if (!AudioCtx) return 'unsupported';
+  if (muted) return 'muted';
+  if (!audioCtx) return hasStickyUserActivation() ? 'idle' : 'locked';
+  return audioCtx.state || 'unknown';
+}
+
+function playAudioUnlockChime() {
+  if (!audioCtx || audioCtx.state !== 'running' || muted) return;
+  const now = audioCtx.currentTime;
+  [659, 988].forEach((freq, i) => {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, now + i * 0.08);
+    gain.gain.setValueAtTime(0.0001, now + i * 0.08);
+    gain.gain.exponentialRampToValueAtTime(0.09 * masterVolume, now + i * 0.08 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.08 + 0.18);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(now + i * 0.08);
+    osc.stop(now + i * 0.08 + 0.2);
+  });
+}
+
+function markAudioRunning() {
+  hideAudioUnlockPrompt();
+  if (!audioUnlockChimePlayed) {
+    audioUnlockChimePlayed = true;
+    playAudioUnlockChime();
+  }
+}
+
+function performPendingStartScreenAction(source = 'auto') {
+  if (!pendingStartScreenAction) return false;
+  if (gameState !== 'start' || talentsOpen || keybindsOpen || controllerSettingsOpen || settingsOpen) return false;
+
+  const action = pendingStartScreenAction;
+  pendingStartScreenAction = '';
+  requestAudioResume(source);
+  tryEnterFullscreen(source);
+
+  if (action === 'settings') {
+    settingsOpen = true;
+    settingsSelection = 0;
+    return true;
+  }
+  if (action === 'daily') {
+    dailyMode = false;
+    startDailyChallenge();
+    return true;
+  }
+  if (action === 'start') {
+    try { initGame(); } catch (e) { console.error(e); }
+    return true;
+  }
+  return false;
+}
+
+function handleAutomaticAudioUnlock(source) {
+  if (muted) return;
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  if (ctx.state === 'running') {
+    hideAudioUnlockPrompt();
+    if (hasStickyUserActivation()) performPendingStartScreenAction(source);
+    return;
+  }
+  requestAudioResume(source);
+  if (hasStickyUserActivation()) performPendingStartScreenAction(source);
+}
+
+function installAutomaticAudioUnlockListeners() {
+  if (audioUnlockListenersInstalled) return;
+  audioUnlockListenersInstalled = true;
+
+  document.addEventListener('pointerdown', () => handleAutomaticAudioUnlock('pointer'), true);
+  document.addEventListener('mousedown', () => handleAutomaticAudioUnlock('pointer'), true);
+  document.addEventListener('click', () => handleAutomaticAudioUnlock('pointer'), true);
+  document.addEventListener('touchstart', () => handleAutomaticAudioUnlock('touch'), true);
+  window.addEventListener('keydown', () => handleAutomaticAudioUnlock('keyboard'), true);
+  window.addEventListener('keyup', () => handleAutomaticAudioUnlock('keyboard'), true);
+  window.addEventListener('focus', () => {
+    if (hasStickyUserActivation()) handleAutomaticAudioUnlock('auto');
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && hasStickyUserActivation()) handleAutomaticAudioUnlock('auto');
+  });
+}
+
+installAutomaticAudioUnlockListeners();
+
+function requestAudioResume(source = 'auto') {
+  if (source === 'gamepad' && !hasStickyUserActivation()) {
+    showAudioUnlockPrompt('gamepad');
+    return false;
+  }
+  const ctx = ensureAudio();
+  if (!ctx) return false;
+  if (ctx.state === 'running') {
+    markAudioRunning();
+    return true;
+  }
+  if (source === 'gamepad') showAudioUnlockPrompt('gamepad');
+  if (ctx.state === 'closed') return false;
+
+  if (!audioResumePromise) {
+    try {
+      const resumeResult = ctx.resume();
+      audioResumePromise = Promise.resolve(resumeResult)
+        .then(() => {
+          if (ctx.state === 'running') markAudioRunning();
+        })
+        .catch(() => {})
+        .finally(() => {
+          audioResumePromise = null;
+          if (ctx.state === 'running') markAudioRunning();
+        });
+    } catch (e) {
+      return false;
+    }
+  }
+  return false;
+}
+
+function needsManualAudioUnlockForGamepad() {
+  if (muted) return false;
+  if (!isGamepadUiPreferred()) return false;
+  if (hasStickyUserActivation()) return false;
+  return !audioCtx || audioCtx.state !== 'running';
+}
+
+function blockStartScreenGamepadActionUntilAudioUnlock(action = '') {
+  if (!needsManualAudioUnlockForGamepad()) return false;
+  pendingStartScreenAction = action || pendingStartScreenAction;
+  showAudioUnlockPrompt('gamepad');
+  tryEnterFullscreen('gamepad');
+  return true;
+}
 
 function playSound(type) {
   ensureAudio();
-  if (audioCtx.state === 'suspended') audioCtx.resume();
+  if (!audioCtx) return;
+  if (audioCtx.state !== 'running') {
+    const unlockSource = lastInputMode === 'gamepad' ? 'gamepad' : 'generic';
+    showAudioUnlockPrompt(unlockSource);
+    requestAudioResume(lastInputMode === 'gamepad' ? 'gamepad' : 'auto');
+    return;
+  }
   if (muted) return;
   const now = audioCtx.currentTime;
   const vol = masterVolume;
@@ -443,6 +668,52 @@ const mouse = { x: GAME_W / 2, y: GAME_H / 2, down: false, clicked: false };
 const TOUCH_LEFT_BASE = { x: 132, y: GAME_H - 120 };
 const TOUCH_RIGHT_BASE = { x: GAME_W - 210, y: GAME_H - 185 };
 const GAMEPAD_DEADZONE = 0.2;
+const GAMEPAD_TRIGGER_THRESHOLD = 0.35;
+const GAMEPAD_DPAD_AXIS_THRESHOLD = 0.5;
+const GAMEPAD_STICK_SHOOT_THRESHOLD = 0.18;
+const GAMEPAD_MENU_STICK_THRESHOLD = 0.6;
+const CONTROLLER_BUTTON_LABELS = {
+  0: 'A',
+  1: 'B',
+  2: 'X',
+  3: 'Y',
+  4: 'LB',
+  5: 'RB',
+  6: 'LT',
+  7: 'RT',
+  8: 'VIEW',
+  9: 'MENU',
+  10: 'LS',
+  11: 'RS',
+  12: 'DPAD UP',
+  13: 'DPAD DOWN',
+  14: 'DPAD LEFT',
+  15: 'DPAD RIGHT',
+  16: 'XBOX'
+};
+const DEFAULT_CONTROLLER_BINDINGS = {
+  confirm: 0,
+  back: 1,
+  convert: 2,
+  shop: 3,
+  prevWeapon: 4,
+  nextWeapon: 5,
+  pause: 9
+};
+const CONTROLLER_SETTINGS_ITEMS = [
+  { label: 'Controller Vibration', type: 'toggle', key: 'vibration' },
+  { label: 'Rumble Strength', type: 'slider', key: 'vibrationStrength' },
+  { label: 'Test Rumble', type: 'action', key: 'testRumble' },
+  { label: 'Confirm / Start', type: 'binding', action: 'confirm' },
+  { label: 'Back / Cancel', type: 'binding', action: 'back' },
+  { label: 'Wake / Settings', type: 'binding', action: 'convert' },
+  { label: 'Shop / Daily', type: 'binding', action: 'shop' },
+  { label: 'Prev Weapon', type: 'binding', action: 'prevWeapon' },
+  { label: 'Next Weapon', type: 'binding', action: 'nextWeapon' },
+  { label: 'Pause', type: 'binding', action: 'pause' },
+  { label: 'Reset Defaults', type: 'action', key: 'resetController' },
+  { label: 'Back', type: 'action', key: 'back' }
+];
 const touchState = {
   leftId: null,
   rightId: null,
@@ -465,9 +736,13 @@ const touchState = {
 };
 const gamepadState = {
   connected: false,
+  index: -1,
   name: '',
+  mapping: '',
   moveX: 0,
   moveY: 0,
+  dpadX: 0,
+  dpadY: 0,
   aimX: 1,
   aimY: 0,
   aimActive: false,
@@ -486,12 +761,62 @@ const gamepadState = {
   menuDownPressed: false,
   menuLeftPressed: false,
   menuRightPressed: false,
+  active: false,
   buttonDown: {}
 };
 let touchControlsEnabled = prefersCoarsePointer;
 let brightness = 1;
 let uiScale = 1;
 let showKeybindHints = true;
+let lastInputMode = prefersCoarsePointer ? 'touch' : 'mouse';
+let controllerBindings = { ...DEFAULT_CONTROLLER_BINDINGS };
+let controllerSettingsOpen = false;
+let controllerSelection = 0;
+let controllerRemappingAction = null;
+let controllerRemapReady = false;
+let controllerVibrationEnabled = true;
+let controllerVibrationIntensity = 0.75;
+let lastRumbleAt = 0;
+let lastGamepadReadError = '';
+
+function setInputMode(mode) {
+  lastInputMode = mode;
+}
+
+function isGamepadUiPreferred() {
+  return gamepadState.connected && lastInputMode === 'gamepad';
+}
+
+function shouldShowTouchControls() {
+  return touchControlsEnabled && gameState === 'playing' && !isGamepadUiPreferred();
+}
+
+function isFirefoxFamilyBrowser() {
+  return /(?:Firefox|LibreWolf)\//i.test(navigator.userAgent || '');
+}
+
+function getGamepadApi() {
+  if (typeof navigator.getGamepads === 'function') return navigator.getGamepads.bind(navigator);
+  if (typeof navigator.webkitGetGamepads === 'function') return navigator.webkitGetGamepads.bind(navigator);
+  return null;
+}
+
+function getGamepadConnectionHint() {
+  if (lastGamepadReadError.includes('SecurityError') || !window.isSecureContext) {
+    return 'Gamepad API blocked here | Use http://localhost or https://';
+  }
+  if (isFirefoxFamilyBrowser()) {
+    return 'LibreWolf/Firefox: focus tab + press pad | disable resistFingerprinting if hidden';
+  }
+  return 'Focus this tab, then press any pad button or move a stick';
+}
+
+function getControllerFullscreenPromptText() {
+  if (isFirefoxFamilyBrowser()) {
+    return 'Firefox blocks pad-only fullscreen | Press Enter/F or click once';
+  }
+  return 'Press Enter/F or click once if fullscreen stays windowed';
+}
 
 function getCanvasPoint(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
@@ -504,6 +829,7 @@ function getCanvasPoint(clientX, clientY) {
 }
 
 function updateMousePosition(clientX, clientY) {
+  setInputMode('mouse');
   const point = getCanvasPoint(clientX, clientY);
   mouse.x = point.x;
   mouse.y = point.y;
@@ -541,6 +867,16 @@ function getKeybindsLayout() {
   const boxY = GAME_H / 2 - boxH / 2;
   const footerY = boxY + boxH - 54;
   return { compact, boxW, boxH, boxX, boxY, rowH, footerY };
+}
+
+function getControllerLayout() {
+  const compact = isCompactUiLayout();
+  const boxW = compact ? 462 : 430;
+  const rowH = compact ? 36 : 33;
+  const boxH = 146 + CONTROLLER_SETTINGS_ITEMS.length * rowH;
+  const boxX = GAME_W / 2 - boxW / 2;
+  const boxY = GAME_H / 2 - boxH / 2;
+  return { compact, boxW, boxH, boxX, boxY, rowH };
 }
 
 function getKeybindFooterButtons(layout) {
@@ -609,6 +945,200 @@ function resetTouchAim() {
   touchState.shootClicked = false;
 }
 
+function formatControllerButton(buttonIndex) {
+  if (!Number.isInteger(buttonIndex)) return 'UNBOUND';
+  return CONTROLLER_BUTTON_LABELS[buttonIndex] || `BTN ${buttonIndex}`;
+}
+
+function getControllerBindingLabel(action) {
+  return formatControllerButton(controllerBindings[action]);
+}
+
+function makeControllerTextToken(text, color = null) {
+  return { type: 'text', text, color };
+}
+
+function makeControllerButtonToken(buttonIndex) {
+  return { type: 'button', buttonIndex };
+}
+
+function makeControllerActionToken(action) {
+  return makeControllerButtonToken(controllerBindings[action]);
+}
+
+function makeControllerLabelToken(label) {
+  return { type: 'label', label };
+}
+
+function getControllerBadgeInfo(label) {
+  const normalized = String(label || 'UNBOUND').toUpperCase();
+  const badge = {
+    label: normalized,
+    shape: 'pill',
+    fill: '#243240',
+    stroke: '#7f90a3',
+    text: '#f5f7fa',
+    minWidth: 0
+  };
+
+  switch (normalized) {
+    case 'A':
+      return { ...badge, shape: 'circle', fill: '#2e7d32', stroke: '#81c784' };
+    case 'B':
+      return { ...badge, shape: 'circle', fill: '#c62828', stroke: '#ef9a9a' };
+    case 'X':
+      return { ...badge, shape: 'circle', fill: '#1565c0', stroke: '#90caf9' };
+    case 'Y':
+      return { ...badge, shape: 'circle', fill: '#f9a825', stroke: '#ffe082', text: '#101418' };
+    case 'MENU':
+      return { ...badge, label: '≡', fill: '#37474f', stroke: '#b0bec5', minWidth: 20 };
+    case 'VIEW':
+      return { ...badge, label: '▣', fill: '#37474f', stroke: '#b0bec5', minWidth: 20 };
+    case 'XBOX':
+      return { ...badge, shape: 'circle', label: '⊗', fill: '#1b5e20', stroke: '#a5d6a7' };
+    case 'DPAD UP':
+      return { ...badge, label: '▲', minWidth: 20 };
+    case 'DPAD DOWN':
+      return { ...badge, label: '▼', minWidth: 20 };
+    case 'DPAD LEFT':
+      return { ...badge, label: '◀', minWidth: 20 };
+    case 'DPAD RIGHT':
+      return { ...badge, label: '▶', minWidth: 20 };
+    case 'D-PAD':
+      return { ...badge, label: '✚', minWidth: 22 };
+    case 'LT':
+    case 'RT':
+      return { ...badge, fill: '#4e342e', stroke: '#bcaaa4', minWidth: 24 };
+    case 'LB':
+    case 'RB':
+      return { ...badge, fill: '#37474f', stroke: '#b0bec5', minWidth: 24 };
+    case 'LS':
+    case 'RS':
+      return { ...badge, fill: '#263238', stroke: '#90a4ae', minWidth: 24 };
+    case 'UNBOUND':
+      return { ...badge, fill: '#3e2723', stroke: '#8d6e63', minWidth: 42 };
+    default:
+      return badge;
+  }
+}
+
+function getControllerTokenBadgeInfo(token) {
+  if (token.type === 'button') return getControllerBadgeInfo(formatControllerButton(token.buttonIndex));
+  return getControllerBadgeInfo(token.label);
+}
+
+function getInlineControllerTokenWidth(token, badgeHeight) {
+  if (token.type === 'text') return ctx.measureText(token.text).width;
+  const info = getControllerTokenBadgeInfo(token);
+  const innerWidth = ctx.measureText(info.label).width;
+  if (info.shape === 'circle') return badgeHeight;
+  return Math.max(info.minWidth || 0, innerWidth + badgeHeight * 0.7);
+}
+
+function drawRoundedRectPath(x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.arcTo(x + width, y, x + width, y + r, r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.arcTo(x + width, y + height, x + width - r, y + height, r);
+  ctx.lineTo(x + r, y + height);
+  ctx.arcTo(x, y + height, x, y + height - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+
+function drawInlineControllerPrompt(tokens, x, y, options = {}) {
+  const {
+    align = 'left',
+    font = '11px monospace',
+    textColor = '#fff',
+    gap = 4,
+    badgeHeight = 16
+  } = options;
+
+  ctx.save();
+  ctx.font = font;
+  ctx.textBaseline = 'middle';
+
+  const widths = tokens.map(token => getInlineControllerTokenWidth(token, badgeHeight));
+  const totalWidth = widths.reduce((sum, width) => sum + width, 0) + Math.max(0, tokens.length - 1) * gap;
+
+  let cursor = x;
+  if (align === 'center') cursor -= totalWidth / 2;
+  else if (align === 'right') cursor -= totalWidth;
+
+  tokens.forEach((token, index) => {
+    const width = widths[index];
+
+    if (token.type === 'text') {
+      ctx.fillStyle = token.color || textColor;
+      ctx.textAlign = 'left';
+      ctx.fillText(token.text, cursor, y);
+    } else {
+      const info = getControllerTokenBadgeInfo(token);
+      const top = y - badgeHeight / 2;
+
+      if (info.shape === 'circle') {
+        ctx.fillStyle = info.fill;
+        ctx.beginPath();
+        ctx.arc(cursor + width / 2, y, badgeHeight / 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = info.stroke;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = info.fill;
+        drawRoundedRectPath(cursor, top, width, badgeHeight, badgeHeight * 0.42);
+        ctx.fill();
+        ctx.strokeStyle = info.stroke;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = info.text;
+      ctx.font = info.shape === 'circle'
+        ? `bold ${Math.max(9, Math.round(badgeHeight * 0.6))}px monospace`
+        : `bold ${Math.max(8, Math.round(badgeHeight * 0.48))}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(info.label, cursor + width / 2, y + 0.5);
+      ctx.font = font;
+    }
+
+    cursor += width + gap;
+  });
+
+  ctx.restore();
+}
+
+function sanitizeControllerBindings(data) {
+  const bindings = { ...DEFAULT_CONTROLLER_BINDINGS };
+  if (!data || typeof data !== 'object') return bindings;
+  for (const key of Object.keys(DEFAULT_CONTROLLER_BINDINGS)) {
+    const value = data[key];
+    if (Number.isInteger(value) && value >= 0 && value <= 31) {
+      bindings[key] = value;
+    }
+  }
+  return bindings;
+}
+
+function assignControllerBinding(action, buttonIndex) {
+  const previous = controllerBindings[action];
+  const swappedAction = Object.keys(controllerBindings).find(key => key !== action && controllerBindings[key] === buttonIndex);
+  controllerBindings[action] = buttonIndex;
+  if (swappedAction) controllerBindings[swappedAction] = previous;
+}
+
+function resetControllerBindingsToDefault() {
+  controllerBindings = { ...DEFAULT_CONTROLLER_BINDINGS };
+  controllerRemappingAction = null;
+  controllerRemapReady = false;
+  saveSettings();
+}
+
 function updateTouchMovement(point) {
   const maxRadius = 64;
   const deadzone = 10;
@@ -657,6 +1187,7 @@ function updateTouchAim(point, clicked = false) {
 }
 
 function handleGameplayTouchStart(touch) {
+  setInputMode('touch');
   const point = getCanvasPoint(touch.clientX, touch.clientY);
   const buttons = getGameplayButtonRects();
 
@@ -689,7 +1220,7 @@ function handleGameplayTouchStart(touch) {
 
 function handleTouchStart(event) {
   if (isDuplicateBodyTouchEvent(event)) return;
-  ensureAudio();
+  requestAudioResume('touch');
   tryEnterFullscreen();
   if (touchControlsEnabled && gameState === 'playing') {
     event.preventDefault();
@@ -715,6 +1246,7 @@ function handleTouchMove(event) {
     return;
   }
   event.preventDefault();
+  setInputMode('touch');
   for (const touch of event.changedTouches) {
     const point = getCanvasPoint(touch.clientX, touch.clientY);
     if (touch.identifier === touchState.leftId) {
@@ -742,12 +1274,32 @@ function handleTouchEnd(event) {
   }
 }
 
+function getConnectedGamepads() {
+  const readGamepads = getGamepadApi();
+  if (!readGamepads) return [];
+  try {
+    lastGamepadReadError = '';
+    return Array.from(readGamepads() || []).filter(Boolean).filter(gamepad => gamepad.connected !== false);
+  } catch (error) {
+    lastGamepadReadError = error && error.name ? `${error.name}: ${error.message || ''}`.trim() : 'Gamepad read failed';
+    return [];
+  }
+}
+
+function getActiveGamepad() {
+  const pads = getConnectedGamepads();
+  if (!pads.length) return null;
+  const current = pads.find(gamepad => gamepad.index === gamepadState.index);
+  return current || pads[0];
+}
+
 canvas.addEventListener('mousemove', e => {
   updateMousePosition(e.clientX, e.clientY);
 });
 canvas.addEventListener('mousedown', e => {
-  ensureAudio();
+  requestAudioResume('pointer');
   tryEnterFullscreen();
+  setInputMode('mouse');
   mouse.down = true;
   mouse.clicked = true;
   e.stopPropagation();
@@ -757,8 +1309,9 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 // Also capture clicks on the whole page for start screen
 document.body.addEventListener('mousedown', e => {
-  ensureAudio();
+  requestAudioResume('pointer');
   tryEnterFullscreen();
+  setInputMode('mouse');
   mouse.down = true;
   mouse.clicked = true;
 });
@@ -788,9 +1341,116 @@ function applyAxisDeadzone(value, deadzone = GAMEPAD_DEADZONE) {
   const scaled = (magnitude - deadzone) / (1 - deadzone);
   return Math.sign(value) * scaled;
 }
-function isGamepadButtonDown(gamepad, index) {
+function readGamepadAxis(gamepad, index) {
+  const value = gamepad && gamepad.axes ? gamepad.axes[index] : 0;
+  return Number.isFinite(value) ? value : 0;
+}
+function readGamepadButtonValue(gamepad, index) {
   const button = gamepad && gamepad.buttons ? gamepad.buttons[index] : null;
-  return !!button && (button.pressed || button.value > 0.5);
+  if (!button) return 0;
+  const value = Number.isFinite(button.value) ? button.value : 0;
+  return button.pressed ? Math.max(value, 1) : value;
+}
+function isGamepadButtonDown(gamepad, index) {
+  return readGamepadButtonValue(gamepad, index) > 0.5;
+}
+function isGamepadActionDown(gamepad, action) {
+  return isGamepadButtonDown(gamepad, controllerBindings[action]);
+}
+function readGamepadStick(gamepad, candidates) {
+  for (const [xIndex, yIndex] of candidates) {
+    const x = applyAxisDeadzone(readGamepadAxis(gamepad, xIndex));
+    const y = applyAxisDeadzone(readGamepadAxis(gamepad, yIndex));
+    if (Math.hypot(x, y) > 0.01) {
+      return { x, y, active: true };
+    }
+  }
+  return { x: 0, y: 0, active: false };
+}
+function readGamepadTriggerValue(gamepad, buttonIndex, axisIndex = null) {
+  const buttonValue = readGamepadButtonValue(gamepad, buttonIndex);
+  if (buttonValue > 0) return buttonValue;
+  if (axisIndex === null) return 0;
+  const axisValue = readGamepadAxis(gamepad, axisIndex);
+  return axisValue < 0 ? (axisValue + 1) * 0.5 : axisValue;
+}
+function readGamepadDpad(gamepad) {
+  let x = 0;
+  let y = 0;
+  if (isGamepadButtonDown(gamepad, 14)) x -= 1;
+  if (isGamepadButtonDown(gamepad, 15)) x += 1;
+  if (isGamepadButtonDown(gamepad, 12)) y -= 1;
+  if (isGamepadButtonDown(gamepad, 13)) y += 1;
+  if (x === 0) {
+    const axisX = readGamepadAxis(gamepad, 6);
+    if (axisX <= -GAMEPAD_DPAD_AXIS_THRESHOLD) x = -1;
+    else if (axisX >= GAMEPAD_DPAD_AXIS_THRESHOLD) x = 1;
+  }
+  if (y === 0) {
+    const axisY = readGamepadAxis(gamepad, 7);
+    if (axisY <= -GAMEPAD_DPAD_AXIS_THRESHOLD) y = -1;
+    else if (axisY >= GAMEPAD_DPAD_AXIS_THRESHOLD) y = 1;
+  }
+  return { x, y };
+}
+function getFirstPressedGamepadButton(gamepad) {
+  if (!gamepad || !Array.isArray(gamepad.buttons)) return null;
+  for (let i = 0; i < gamepad.buttons.length; i++) {
+    if (readGamepadButtonValue(gamepad, i) > 0.65) return i;
+  }
+  return null;
+}
+function getGamepadActuator(gamepad) {
+  if (!gamepad) return null;
+  if (gamepad.vibrationActuator) return gamepad.vibrationActuator;
+  if (Array.isArray(gamepad.hapticActuators) && gamepad.hapticActuators.length) {
+    return gamepad.hapticActuators[0];
+  }
+  return null;
+}
+function gamepadSupportsRumble(gamepad = getActiveGamepad()) {
+  const actuator = getGamepadActuator(gamepad);
+  return !!actuator && (typeof actuator.playEffect === 'function' || typeof actuator.pulse === 'function');
+}
+function rumbleGamepad(strongMagnitude = 0.4, weakMagnitude = 0.22, duration = 100) {
+  if (!controllerVibrationEnabled) return;
+  const gamepad = getActiveGamepad();
+  const actuator = getGamepadActuator(gamepad);
+  if (!actuator) return;
+
+  const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  if (now - lastRumbleAt < 45) return;
+  lastRumbleAt = now;
+
+  const strong = clamp(strongMagnitude * controllerVibrationIntensity, 0, 1);
+  const weak = clamp(weakMagnitude * controllerVibrationIntensity, 0, 1);
+  const pulseStrength = Math.max(strong, weak);
+  const pulseFallback = () => {
+    if (typeof actuator.pulse !== 'function') return;
+    try {
+      const pulseResult = actuator.pulse(pulseStrength, duration);
+      if (pulseResult && typeof pulseResult.catch === 'function') pulseResult.catch(() => {});
+    } catch (e) {}
+  };
+
+  if (typeof actuator.playEffect === 'function') {
+    const effects = Array.isArray(actuator.effects) ? actuator.effects : [];
+    const effectType = effects.includes('dual-rumble') ? 'dual-rumble' : effects[0] || 'dual-rumble';
+    try {
+      const result = actuator.playEffect(effectType, {
+        startDelay: 0,
+        duration,
+        weakMagnitude: weak,
+        strongMagnitude: strong
+      });
+      if (result && typeof result.catch === 'function') {
+        result.catch(() => pulseFallback());
+      }
+      return;
+    } catch (e) {}
+  }
+
+  pulseFallback();
 }
 function clearGamepadTransientState() {
   gamepadState.shootClicked = false;
@@ -810,12 +1470,18 @@ function clearGamepadTransientState() {
 }
 function resetGamepadInput() {
   clearGamepadTransientState();
+  controllerFullscreenPromptVisible = false;
   gamepadState.connected = false;
+  gamepadState.index = -1;
   gamepadState.name = '';
+  gamepadState.mapping = '';
   gamepadState.moveX = 0;
   gamepadState.moveY = 0;
+  gamepadState.dpadX = 0;
+  gamepadState.dpadY = 0;
   gamepadState.aimActive = false;
   gamepadState.shootDown = false;
+  gamepadState.active = false;
   gamepadState.buttonDown = {};
 }
 function updateGamepadButtonState(name, isDown, onPress) {
@@ -823,30 +1489,53 @@ function updateGamepadButtonState(name, isDown, onPress) {
   if (isDown && !wasDown) onPress();
   gamepadState.buttonDown[name] = isDown;
 }
+window.addEventListener('gamepadconnected', event => {
+  const pad = event.gamepad;
+  if (!pad) return;
+  requestAudioResume('keyboard');
+  gamepadState.connected = true;
+  gamepadState.index = pad.index;
+  gamepadState.name = pad.id || 'Gamepad';
+  gamepadState.mapping = pad.mapping || '';
+});
+window.addEventListener('gamepaddisconnected', () => {
+  const pads = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter(Boolean) : [];
+  if (!pads.length) resetGamepadInput();
+});
 function pollGamepadInput() {
   clearGamepadTransientState();
-  const pads = navigator.getGamepads ? Array.from(navigator.getGamepads()).filter(Boolean) : [];
-  const pad = pads.find(gamepad => gamepad && gamepad.connected);
+  const pad = getActiveGamepad();
   if (!pad) {
     resetGamepadInput();
     return;
   }
 
   gamepadState.connected = true;
+  gamepadState.index = pad.index;
   gamepadState.name = pad.id || 'Gamepad';
-  gamepadState.moveX = applyAxisDeadzone(pad.axes[0] || 0);
-  gamepadState.moveY = applyAxisDeadzone(pad.axes[1] || 0);
+  gamepadState.mapping = pad.mapping || '';
 
-  const rawAimX = applyAxisDeadzone(pad.axes[2] || 0);
-  const rawAimY = applyAxisDeadzone(pad.axes[3] || 0);
-  const aimMagnitude = Math.hypot(rawAimX, rawAimY);
+  const moveStick = readGamepadStick(pad, [[0, 1]]);
+  const aimStick = readGamepadStick(pad, [[2, 3], [3, 4], [2, 5]]);
+  const dpad = readGamepadDpad(pad);
+
+  gamepadState.moveX = moveStick.x;
+  gamepadState.moveY = moveStick.y;
+  gamepadState.dpadX = dpad.x;
+  gamepadState.dpadY = dpad.y;
+
+  const aimMagnitude = Math.hypot(aimStick.x, aimStick.y);
   gamepadState.aimActive = aimMagnitude > 0.01;
   if (gamepadState.aimActive) {
-    gamepadState.aimX = rawAimX / aimMagnitude;
-    gamepadState.aimY = rawAimY / aimMagnitude;
+    gamepadState.aimX = aimStick.x / aimMagnitude;
+    gamepadState.aimY = aimStick.y / aimMagnitude;
   }
 
-  const shootHeld = isGamepadButtonDown(pad, 7) || isGamepadButtonDown(pad, 6);
+  const stickShootHeld = aimMagnitude >= GAMEPAD_STICK_SHOOT_THRESHOLD;
+  const shootHeld =
+    stickShootHeld ||
+    readGamepadTriggerValue(pad, 7, 5) >= GAMEPAD_TRIGGER_THRESHOLD ||
+    readGamepadTriggerValue(pad, 6, 4) >= GAMEPAD_TRIGGER_THRESHOLD;
   if (shootHeld && !gamepadState.buttonDown.shoot) {
     gamepadState.shootClicked = true;
   }
@@ -860,21 +1549,47 @@ function pollGamepadInput() {
   }
   gamepadState.buttonDown.rightStickShoot = rightStickPush;
   gamepadState.shootDown = shootHeld || rightStickPush;
+  updateGamepadButtonState('confirm', isGamepadActionDown(pad, 'confirm'), () => { gamepadState.confirmPressed = true; });
+  updateGamepadButtonState('back', isGamepadActionDown(pad, 'back'), () => { gamepadState.backPressed = true; });
+  updateGamepadButtonState('settings', isGamepadActionDown(pad, 'convert'), () => { gamepadState.settingsPressed = true; });
+  updateGamepadButtonState('daily', isGamepadActionDown(pad, 'shop'), () => { gamepadState.dailyPressed = true; });
+  updateGamepadButtonState('prevWeapon', isGamepadActionDown(pad, 'prevWeapon'), () => { gamepadState.prevWeaponPressed = true; });
+  updateGamepadButtonState('nextWeapon', isGamepadActionDown(pad, 'nextWeapon'), () => { gamepadState.nextWeaponPressed = true; });
+  updateGamepadButtonState('pause', isGamepadActionDown(pad, 'pause'), () => { gamepadState.pausePressed = true; });
+  const menuOverlayActive =
+    gameState === 'shop' ||
+    gameState === 'start' ||
+    paused ||
+    settingsOpen ||
+    controllerSettingsOpen ||
+    keybindsOpen ||
+    talentsOpen;
+  updateGamepadButtonState('menuUp', dpad.y < 0 || (menuOverlayActive && moveStick.y <= -GAMEPAD_MENU_STICK_THRESHOLD), () => { gamepadState.menuUpPressed = true; });
+  updateGamepadButtonState('menuDown', dpad.y > 0 || (menuOverlayActive && moveStick.y >= GAMEPAD_MENU_STICK_THRESHOLD), () => { gamepadState.menuDownPressed = true; });
+  updateGamepadButtonState('menuLeft', dpad.x < 0 || (menuOverlayActive && moveStick.x <= -GAMEPAD_MENU_STICK_THRESHOLD), () => { gamepadState.menuLeftPressed = true; });
+  updateGamepadButtonState('menuRight', dpad.x > 0 || (menuOverlayActive && moveStick.x >= GAMEPAD_MENU_STICK_THRESHOLD), () => { gamepadState.menuRightPressed = true; });
 
-  updateGamepadButtonState('confirm', isGamepadButtonDown(pad, 0), () => { gamepadState.confirmPressed = true; });
-  updateGamepadButtonState('back', isGamepadButtonDown(pad, 1), () => { gamepadState.backPressed = true; });
-  updateGamepadButtonState('settings', isGamepadButtonDown(pad, 2), () => { gamepadState.settingsPressed = true; });
-  updateGamepadButtonState('daily', isGamepadButtonDown(pad, 3), () => { gamepadState.dailyPressed = true; });
-  updateGamepadButtonState('prevWeapon', isGamepadButtonDown(pad, 4), () => { gamepadState.prevWeaponPressed = true; });
-  updateGamepadButtonState('nextWeapon', isGamepadButtonDown(pad, 5), () => { gamepadState.nextWeaponPressed = true; });
-  updateGamepadButtonState('pause', isGamepadButtonDown(pad, 9), () => { gamepadState.pausePressed = true; });
-  updateGamepadButtonState('menuUp', isGamepadButtonDown(pad, 12), () => { gamepadState.menuUpPressed = true; });
-  updateGamepadButtonState('menuDown', isGamepadButtonDown(pad, 13), () => { gamepadState.menuDownPressed = true; });
-  updateGamepadButtonState('menuLeft', isGamepadButtonDown(pad, 14), () => { gamepadState.menuLeftPressed = true; });
-  updateGamepadButtonState('menuRight', isGamepadButtonDown(pad, 15), () => { gamepadState.menuRightPressed = true; });
-
+  const wasActive = gamepadState.active;
   gamepadState.convertPressed = gamepadState.settingsPressed;
   gamepadState.shopPressed = gamepadState.dailyPressed;
+  gamepadState.active =
+    moveStick.active ||
+    aimStick.active ||
+    dpad.x !== 0 ||
+    dpad.y !== 0 ||
+    shootHeld ||
+    gamepadState.confirmPressed ||
+    gamepadState.backPressed ||
+    gamepadState.settingsPressed ||
+    gamepadState.dailyPressed ||
+    gamepadState.pausePressed ||
+    gamepadState.prevWeaponPressed ||
+    gamepadState.nextWeaponPressed;
+  if (gamepadState.active) {
+    setInputMode('gamepad');
+    requestAudioResume('gamepad');
+    if (!wasActive) tryEnterFullscreen('gamepad');
+  }
 }
 function filterInPlace(array, predicate) {
   let write = 0;
@@ -1010,6 +1725,36 @@ class Player {
     this.stats = { kills: 0, converts: 0, bossesKilled: 0, wavesCompleted: 0, shotsFired: 0, damageDealt: 0, totalSats: 0 };
   }
 
+  normalizeWeaponLoadout(preferredWeapon = null) {
+    if (!Array.isArray(this.weapons) || this.weapons.length === 0) {
+      this.weapons = ['pistol'];
+    }
+    if (!this.weapons.includes('pistol')) {
+      this.weapons.unshift('pistol');
+    }
+    if (preferredWeapon && this.weapons.includes(preferredWeapon)) {
+      this.currentWeapon = this.weapons.indexOf(preferredWeapon);
+      return;
+    }
+    if (!Number.isInteger(this.currentWeapon) || this.currentWeapon < 0 || this.currentWeapon >= this.weapons.length) {
+      this.currentWeapon = 0;
+    }
+  }
+
+  equipWeapon(weapon) {
+    if (!this.weapons.includes(weapon)) {
+      this.weapons.push(weapon);
+    }
+    this.normalizeWeaponLoadout(weapon);
+  }
+
+  removeWeaponFromLoadout(weapon) {
+    const activeWeapon = this.weapons[this.currentWeapon];
+    this.weapons = this.weapons.filter(w => w !== weapon);
+    const fallbackWeapon = activeWeapon === weapon ? 'pistol' : activeWeapon;
+    this.normalizeWeaponLoadout(fallbackWeapon);
+  }
+
   update(dt) {
     // Movement
     let dx = 0, dy = 0;
@@ -1028,8 +1773,8 @@ class Player {
       dy += touchState.moveY;
     }
     if (gamepadState.connected) {
-      dx += gamepadState.moveX;
-      dy += gamepadState.moveY;
+      dx += gamepadState.moveX + gamepadState.dpadX;
+      dy += gamepadState.moveY + gamepadState.dpadY;
     }
 
     // Normalize diagonal
@@ -1072,6 +1817,7 @@ class Player {
   }
 
   shoot() {
+    this.normalizeWeaponLoadout();
     const weapon = this.weapons[this.currentWeapon];
     const aimTarget = getAimTarget();
     const a = angle(this, aimTarget);
@@ -1112,7 +1858,7 @@ class Player {
         break;
 
       case 'shotgun':
-        if (this.weaponAmmo.shotgun <= 0) { this.currentWeapon = this.weapons.indexOf('pistol') !== -1 ? this.weapons.indexOf('pistol') : 0; return; }
+        if (this.weaponAmmo.shotgun <= 0) { this.removeWeaponFromLoadout('shotgun'); return; }
         this.weaponAmmo.shotgun--;
         this.fireRate = 350;
         const pellets = 7;
@@ -1140,7 +1886,7 @@ class Player {
         break;
 
       case 'homing':
-        if (this.weaponAmmo.homing <= 0) { this.currentWeapon = this.weapons.indexOf('pistol') !== -1 ? this.weapons.indexOf('pistol') : 0; return; }
+        if (this.weaponAmmo.homing <= 0) { this.removeWeaponFromLoadout('homing'); return; }
         this.weaponAmmo.homing--;
         this.fireRate = 500;
         // Find nearest enemy
@@ -1175,7 +1921,7 @@ class Player {
         break;
 
       case 'flamethrower':
-        if (this.weaponAmmo.flamethrower <= 0) { this.currentWeapon = this.weapons.indexOf('pistol') !== -1 ? this.weapons.indexOf('pistol') : 0; return; }
+        if (this.weaponAmmo.flamethrower <= 0) { this.removeWeaponFromLoadout('flamethrower'); return; }
         this.weaponAmmo.flamethrower--;
         this.fireRate = 80;
         // Cone of fire - multiple bullets in a spread
@@ -1219,12 +1965,13 @@ class Player {
   }
 
   fireRailgun() {
+    this.normalizeWeaponLoadout();
     const charge = Math.min(this.railChargeTime || 200, 1000);
     const chargePct = charge / 1000;
     
     // Only fire if charged enough
     if (charge < 200) { this.railChargeTime = 0; return; }
-    if (this.weaponAmmo.railgun <= 0) { this.railChargeTime = 0; this.currentWeapon = this.weapons.indexOf('pistol') !== -1 ? this.weapons.indexOf('pistol') : 0; return; }
+    if (this.weaponAmmo.railgun <= 0) { this.railChargeTime = 0; this.removeWeaponFromLoadout('railgun'); return; }
     
     this.weaponAmmo.railgun--;
     this.railChargeTime = 0;
@@ -3137,6 +3884,13 @@ function triggerShake(intensity, duration) {
   shakeIntensity = intensity;
   shakeDuration = duration;
   shakeTimer = duration;
+  if (intensity >= 3) {
+    rumbleGamepad(
+      clamp(intensity / 12, 0.18, 0.9),
+      clamp(intensity / 20, 0.1, 0.7),
+      clamp(duration, 50, 220)
+    );
+  }
 }
 
 function updateShake(dt) {
@@ -3307,7 +4061,9 @@ let keybindsSelection = 0; // which keybind row is selected
 let keybindsOpen = false; // keybinds editor is open
 let talentsOpen = false; // talent tree editor is open
 let talentsBranch = 0; // which branch is selected (0=offense, 1=defense, 2=utility)
+let talentSelection = 0; // selected talent row, then respec, then back
 let respecConfirm = false;
+let talentTreePadHeld = { up: false, down: false, left: false, right: false };
 
 const KEYBINDS_LIST = [
   { label: 'Move Up', key: 'moveUp' },
@@ -3449,15 +4205,16 @@ let settingsSelection = 0;
 let masterVolume = 0.5;
 let muted = false;
 const SETTINGS_ITEMS = [
+  { label: 'Talent Tree', type: 'talents', key: 'talents' },
+  { label: 'Change Skin', type: 'skin', key: 'skin' },
   { label: 'Master Volume', type: 'slider', key: 'volume' },
   { label: 'Mute', type: 'toggle', key: 'mute' },
   { label: 'Brightness', type: 'slider', key: 'brightness' },
   { label: 'UI Scale', type: 'slider', key: 'uiScale' },
   { label: 'Show Keybind Hints', type: 'toggle', key: 'showKeybindHints' },
   { label: 'Touch Controls', type: 'toggle', key: 'touchControls' },
-  { label: 'Change Skin', type: 'skin', key: 'skin' },
+  { label: 'Controller', type: 'controller', key: 'controller' },
   { label: 'Keybinds', type: 'keybinds', key: 'keybinds' },
-  { label: 'Talent Tree', type: 'talents', key: 'talents' },
   { label: 'Reduced Motion', type: 'toggle', key: 'reducedMotion' },
   { label: 'Colorblind Mode', type: 'toggle', key: 'colorblind' },
   { label: 'Back', type: 'action', key: 'back' }
@@ -3850,6 +4607,8 @@ window.addEventListener('keydown', e => {
     return;
   }
 
+  requestAudioResume('keyboard');
+
   if (e.ctrlKey || e.metaKey) {
     e.preventDefault();
     e.stopPropagation();
@@ -3859,7 +4618,11 @@ window.addEventListener('keydown', e => {
     }
     return;
   }
-  keys[e.key.toLowerCase()] = true;
+  const key = e.key.toLowerCase();
+  if (!e.repeat && (key === 'f' || key === 'enter' || e.code === 'Space')) {
+    tryEnterFullscreen('keyboard');
+  }
+  keys[key] = true;
   // Pause toggle
   if (e.key === 'Escape' && gameState === 'playing') {
     paused = !paused;
@@ -3948,7 +4711,10 @@ function saveSettings() {
       brightness,
       uiScale,
       showKeybindHints,
-      touchControlsEnabled
+      touchControlsEnabled,
+      controllerVibrationEnabled,
+      controllerVibrationIntensity,
+      controllerBindings
     }));
   } catch (e) { console.error('Failed to save settings:', e); }
 }
@@ -3976,6 +4742,9 @@ function loadSettings() {
       if (data.uiScale !== undefined) uiScale = clamp(data.uiScale, 0.85, 1.35);
       if (data.showKeybindHints !== undefined) showKeybindHints = data.showKeybindHints;
       if (data.touchControlsEnabled !== undefined) touchControlsEnabled = data.touchControlsEnabled;
+      if (data.controllerVibrationEnabled !== undefined) controllerVibrationEnabled = data.controllerVibrationEnabled;
+      if (data.controllerVibrationIntensity !== undefined) controllerVibrationIntensity = clamp(data.controllerVibrationIntensity, 0.2, 1);
+      if (data.controllerBindings) controllerBindings = sanitizeControllerBindings(data.controllerBindings);
     }
   } catch (e) { console.error('Failed to load settings:', e); }
 }
@@ -4478,7 +5247,8 @@ function updatePlaying(dt) {
 
   // Check shop proximity
   let nearShop = shops.find(s => s.active && dist(s, player) < 60);
-  if ((keys[keybinds.shop] || gamepadState.shopPressed || gamepadState.confirmPressed) && nearShop && !nearShop.open) {
+  const gamepadShopInteractPressed = nearShop && gamepadState.confirmPressed;
+  if ((keys[keybinds.shop] || gamepadState.shopPressed || gamepadShopInteractPressed) && nearShop && !nearShop.open) {
     gameState = 'shop';
     nearShop.open = true;
     shopSelection = 0;
@@ -4862,12 +5632,11 @@ function updateShop(dt) {
       if (item.type === 'weapon') {
         if (!player.unlockedWeapons.has(item.weapon)) {
           player.unlockedWeapons.add(item.weapon);
-          player.weapons.push(item.weapon);
         }
         if (item.ammo) {
           player.weaponAmmo[item.weapon] = (player.weaponAmmo[item.weapon] || 0) + item.ammo;
         }
-        player.currentWeapon = player.weapons.indexOf(item.weapon);
+        player.equipWeapon(item.weapon);
       } else {
         switch (index) {
           case 0: player.heal(50); break;
@@ -5255,7 +6024,7 @@ function renderGameplay() {
 }
 
 function renderTouchControls() {
-  if (!touchControlsEnabled || gameState !== 'playing') return;
+  if (!shouldShowTouchControls()) return;
 
   const buttons = getGameplayButtonRects();
   const buttonDefs = [
@@ -5483,9 +6252,23 @@ function renderHUD() {
 
   // Weapon slots hint
   if (player.weapons.length > 1 && showKeybindHints) {
-    ctx.fillStyle = COLORS.textDim;
-    ctx.font = '9px monospace';
-    ctx.fillText(gamepadState.connected ? 'LB/RB switch' : '1-4 switch', hudW / 2, hudH - 20);
+    if (isGamepadUiPreferred()) {
+      drawInlineControllerPrompt(
+        [
+          makeControllerActionToken('prevWeapon'),
+          makeControllerTextToken('/'),
+          makeControllerActionToken('nextWeapon'),
+          makeControllerTextToken(' switch')
+        ],
+        hudW / 2,
+        hudH - 20,
+        { align: 'center', font: '9px monospace', textColor: COLORS.textDim, badgeHeight: 13, gap: 3 }
+      );
+    } else {
+      ctx.fillStyle = COLORS.textDim;
+      ctx.font = '9px monospace';
+      ctx.fillText('1-4 switch', hudW / 2, hudH - 20);
+    }
   }
 
   // Boost timers
@@ -5546,17 +6329,53 @@ function renderHUD() {
     ctx.fillText(`${comboCount}x COMBO! (${comboMultiplier.toFixed(1)}x)`, hudW / 2, 80);
   }
 
+  if (hasPendingAudioUnlock()) {
+    ctx.fillStyle = '#ffcc80';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(getAudioUnlockPromptText(), hudW / 2, 42);
+  } else if (controllerFullscreenPromptVisible && isGamepadUiPreferred() && !isFullscreenDisplayActive()) {
+    ctx.fillStyle = '#ffcc80';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(getControllerFullscreenPromptText(), hudW / 2, 42);
+  }
+
   // Controls hint (bottom-right, subtle)
   if (showKeybindHints) {
-    ctx.fillStyle = COLORS.textDim;
-    ctx.font = '10px monospace';
-    ctx.textAlign = 'right';
-    const usingGamepad = gamepadState.connected;
-    const convertHint = usingGamepad ? 'X wake' : touchControlsEnabled ? 'WAKE btn' : formatKey(keybinds.convert);
-    const shopHint = usingGamepad ? 'Y shop' : touchControlsEnabled ? 'SHOP btn' : formatKey(keybinds.shop);
-    const shootHint = usingGamepad ? 'RT/LT shoot' : touchControlsEnabled ? 'Right aim/shoot' : 'Click shoot';
-    const moveHint = usingGamepad ? 'LS move | RS aim' : touchControlsEnabled ? 'Left stick move' : 'WASD move';
-    ctx.fillText(`${moveHint} | ${shootHint} | ${convertHint} | ${shopHint}`, hudW - 15, hudH - MINIMAP_SIZE - 25);
+    const usingGamepad = isGamepadUiPreferred();
+    if (usingGamepad) {
+      drawInlineControllerPrompt(
+        [
+          makeControllerLabelToken('LS'),
+          makeControllerTextToken(' / ', COLORS.textDim),
+          makeControllerLabelToken('D-PAD'),
+          makeControllerTextToken(' move | ', COLORS.textDim),
+          makeControllerLabelToken('RS'),
+          makeControllerTextToken(' aim/fire | ', COLORS.textDim),
+          makeControllerLabelToken('LT'),
+          makeControllerTextToken('/', COLORS.textDim),
+          makeControllerLabelToken('RT'),
+          makeControllerTextToken(' fire | ', COLORS.textDim),
+          makeControllerActionToken('convert'),
+          makeControllerTextToken(' wake | ', COLORS.textDim),
+          makeControllerActionToken('confirm'),
+          makeControllerTextToken(' shop', COLORS.textDim)
+        ],
+        hudW - 15,
+        hudH - MINIMAP_SIZE - 25,
+        { align: 'right', font: '10px monospace', textColor: COLORS.textDim, badgeHeight: 13, gap: 3 }
+      );
+    } else {
+      ctx.fillStyle = COLORS.textDim;
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'right';
+      const shootHint = touchControlsEnabled ? 'Right aim/shoot' : 'Click shoot';
+      const moveHint = touchControlsEnabled ? 'Left stick move' : 'WASD move';
+      const convertHint = touchControlsEnabled ? 'WAKE btn' : formatKey(keybinds.convert);
+      const shopHint = touchControlsEnabled ? 'SHOP btn' : formatKey(keybinds.shop);
+      ctx.fillText(`${moveHint} | ${shootHint} | ${convertHint} | ${shopHint}`, hudW - 15, hudH - MINIMAP_SIZE - 25);
+    }
   }
   ctx.restore();
 }
@@ -5671,6 +6490,7 @@ function renderMinimap() {
 }
 
 function renderPauseMenu() {
+  const usingGamepad = isGamepadUiPreferred();
   // Overlay
   ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
   ctx.fillRect(0, 0, GAME_W, GAME_H);
@@ -5685,11 +6505,46 @@ function renderPauseMenu() {
   // Instructions
   ctx.fillStyle = COLORS.text;
   ctx.font = '18px monospace';
-  ctx.fillText(touchControlsEnabled ? 'Tap anywhere or PAUSE to resume' : 'Press ESC to resume', GAME_W / 2, GAME_H / 2 + 20);
+  if (usingGamepad) {
+    drawInlineControllerPrompt(
+      [
+        makeControllerTextToken('Press ', COLORS.text),
+        makeControllerActionToken('confirm'),
+        makeControllerTextToken(' / ', COLORS.text),
+        makeControllerActionToken('pause'),
+        makeControllerTextToken(' to resume', COLORS.text)
+      ],
+      GAME_W / 2,
+      GAME_H / 2 + 20,
+      { align: 'center', font: '18px monospace', textColor: COLORS.text, badgeHeight: 20, gap: 5 }
+    );
+  } else {
+    ctx.fillText(touchControlsEnabled ? 'Tap anywhere or PAUSE to resume' : 'Press ESC to resume', GAME_W / 2, GAME_H / 2 + 20);
+  }
 
   ctx.fillStyle = COLORS.textDim;
   ctx.font = '14px monospace';
-  ctx.fillText(touchControlsEnabled ? 'Tap resume | Settings menu stays touch-friendly' : 'Click resume | R reset | S shop | O settings', GAME_W / 2, GAME_H / 2 + 60);
+  if (usingGamepad) {
+    drawInlineControllerPrompt(
+      [
+        makeControllerActionToken('back'),
+        makeControllerTextToken(' back | ', COLORS.textDim),
+        makeControllerActionToken('shop'),
+        makeControllerTextToken(' shop | ', COLORS.textDim),
+        makeControllerActionToken('convert'),
+        makeControllerTextToken(' settings', COLORS.textDim)
+      ],
+      GAME_W / 2,
+      GAME_H / 2 + 60,
+      { align: 'center', font: '14px monospace', textColor: COLORS.textDim, badgeHeight: 16, gap: 4 }
+    );
+  } else {
+    ctx.fillText(
+      touchControlsEnabled ? 'Tap resume | Settings menu stays touch-friendly' : 'Click resume | R reset | S shop | O settings',
+      GAME_W / 2,
+      GAME_H / 2 + 60
+    );
+  }
 
   // Handle resume click
   if (mouse.clicked) {
@@ -5723,6 +6578,9 @@ function renderSettings() {
   ctx.font = 'bold 20px monospace';
   ctx.textAlign = 'center';
   ctx.fillText('⚙ SETTINGS', GAME_W / 2, boxY + 35);
+  ctx.fillStyle = getAudioRuntimeStatus() === 'running' ? '#4caf50' : '#ffcc80';
+  ctx.font = '11px monospace';
+  ctx.fillText(`Audio: ${getAudioRuntimeStatus()}`, GAME_W / 2, boxY + 52);
 
   // Items
   SETTINGS_ITEMS.forEach((item, i) => {
@@ -5762,6 +6620,9 @@ function renderSettings() {
     } else if (item.key === 'touchControls') {
       ctx.fillStyle = touchControlsEnabled ? '#4caf50' : COLORS.textDim;
       ctx.fillText(touchControlsEnabled ? 'ON' : 'OFF', boxX + boxW - 25, iy + 5);
+    } else if (item.key === 'controller') {
+      ctx.fillStyle = gamepadState.connected ? '#4caf50' : COLORS.textDim;
+      ctx.fillText('[Open]', boxX + boxW - 25, iy + 5);
     } else if (item.key === 'skin') {
       const skin = SKINS[currentSkin];
       ctx.fillStyle = skin.color;
@@ -5788,6 +6649,99 @@ function renderSettings() {
   ctx.font = '11px monospace';
   ctx.textAlign = 'center';
   ctx.fillText(compact ? 'Tap any row | Enter select | ESC back' : '↑/↓ navigate | Enter select | ESC back', GAME_W / 2, boxY + boxH - 15);
+}
+
+function renderControllerSettings() {
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+  ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+  const layout = getControllerLayout();
+  const { compact, boxW, boxH, boxX, boxY, rowH } = layout;
+  const gamepad = getActiveGamepad();
+  const rumbleAvailable = gamepadSupportsRumble(gamepad);
+
+  ctx.fillStyle = 'rgba(13, 13, 26, 0.96)';
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeStyle = '#4dd0e1';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+  ctx.fillStyle = '#4dd0e1';
+  ctx.font = 'bold 18px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('GAMEPAD SETTINGS', GAME_W / 2, boxY + 28);
+
+  ctx.fillStyle = gamepad ? '#4caf50' : '#f44336';
+  ctx.font = compact ? '10px monospace' : '11px monospace';
+  const controllerName = gamepadState.name || 'Connected';
+  const shortControllerName = controllerName.length > 34 ? `${controllerName.slice(0, 31)}...` : controllerName;
+  const connectionText = gamepad ? `Controller: ${shortControllerName}` : 'Controller: not connected';
+  ctx.fillText(connectionText, GAME_W / 2, boxY + 50);
+
+  ctx.fillStyle = COLORS.textDim;
+  const statusText = gamepad
+    ? `Rumble: ${rumbleAvailable ? 'available' : 'browser/controller dependent'} | Move: LS/D-pad | Shoot: RS/LT/RT`
+    : getGamepadConnectionHint();
+  ctx.fillText(statusText, GAME_W / 2, boxY + 68);
+
+  CONTROLLER_SETTINGS_ITEMS.forEach((item, i) => {
+    const iy = boxY + 96 + i * rowH;
+    const selected = i === controllerSelection;
+
+    if (selected) {
+      ctx.fillStyle = 'rgba(77, 208, 225, 0.14)';
+      ctx.fillRect(boxX + 10, iy - 14, boxW - 20, compact ? 30 : 28);
+    }
+
+    ctx.fillStyle = selected ? COLORS.textBright : COLORS.text;
+    ctx.font = selected ? 'bold 12px monospace' : '12px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(item.label, boxX + 18, iy + 4);
+
+    ctx.textAlign = 'right';
+    if (item.type === 'toggle') {
+      ctx.fillStyle = controllerVibrationEnabled ? '#4caf50' : COLORS.textDim;
+      ctx.fillText(controllerVibrationEnabled ? 'ON' : 'OFF', boxX + boxW - 18, iy + 4);
+    } else if (item.type === 'slider') {
+      const filled = Math.max(1, Math.round(controllerVibrationIntensity * 10));
+      const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
+      ctx.fillStyle = rumbleAvailable ? '#80cbc4' : COLORS.textDim;
+      ctx.fillText(`${bar} ${Math.round(controllerVibrationIntensity * 100)}%`, boxX + boxW - 18, iy + 4);
+    } else if (item.type === 'binding') {
+      if (controllerRemappingAction === item.action) {
+        const blink = Math.sin(Date.now() * 0.01) > 0;
+        if (blink) {
+          ctx.fillStyle = '#ffeb3b';
+          ctx.fillText(gamepad ? 'Press controller button...' : 'Connect controller...', boxX + boxW - 18, iy + 4);
+        }
+      } else {
+        drawInlineControllerPrompt(
+          [makeControllerActionToken(item.action)],
+          boxX + boxW - 18,
+          iy + 4,
+          { align: 'right', font: '12px monospace', textColor: '#4dd0e1', badgeHeight: 15, gap: 0 }
+        );
+      }
+    } else if (item.key === 'testRumble') {
+      ctx.fillStyle = rumbleAvailable ? COLORS.bitcoin : COLORS.textDim;
+      ctx.fillText(rumbleAvailable ? '[Play]' : '[N/A]', boxX + boxW - 18, iy + 4);
+    } else {
+      ctx.fillStyle = COLORS.textDim;
+      ctx.fillText(item.key === 'resetController' ? '[Reset]' : '[Back]', boxX + boxW - 18, iy + 4);
+    }
+  });
+
+  ctx.fillStyle = COLORS.textDim;
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  const footer = controllerRemappingAction
+    ? (gamepad ? 'Press a controller button to bind | ESC or Back row cancels' : 'Connect a controller, then press a button | ESC cancels')
+    : !gamepad
+      ? (compact ? 'Use mouse/touch for now | Reopen after pad shows up' : 'Use mouse/keyboard for now | Reopen after the controller appears')
+      : compact
+      ? 'Tap row or use D-pad | RS/LT/RT all fire'
+      : `↑/↓ navigate | Enter/${getControllerBindingLabel('confirm')} select | D-pad fixed | RS/LT/RT all fire`;
+  ctx.fillText(footer, GAME_W / 2, boxY + boxH - 16);
 }
 
 function renderKeybinds() {
@@ -5883,6 +6837,9 @@ function renderTalents() {
   ctx.fillStyle = '#ffd700';
   ctx.font = '16px monospace';
   ctx.fillText(`Available: ${talentPoints} ★`, GAME_W / 2, 70);
+  ctx.fillStyle = COLORS.textDim;
+  ctx.font = '10px monospace';
+  ctx.fillText(`sel:${talentSelection} moveY:${gamepadState.moveY.toFixed(2)} dpadY:${gamepadState.dpadY.toFixed(2)}`, GAME_W / 2, 88);
 
   // Branch selector
   const branchStartX = GAME_W / 2 - (branches.length * branchW) / 2;
@@ -5899,21 +6856,32 @@ function renderTalents() {
   // Talents
   tree.talents.forEach((talent, i) => {
     const y = startY + i * spacing;
+    const selected = talentSelection === i;
     const rank = getTalentRank(talent.id);
     const maxed = rank >= talent.maxRank;
     const canAfford = talentPoints >= talent.cost && !maxed;
     const hasReq = !talent.requires || getTalentRank(talent.requires) > 0;
 
     // Background
-    ctx.fillStyle = hasReq ? (rank > 0 ? `${tree.color}33` : 'rgba(30, 30, 50, 0.6)') : 'rgba(20, 20, 30, 0.4)';
+    ctx.fillStyle = selected
+      ? 'rgba(255,255,255,0.08)'
+      : hasReq ? (rank > 0 ? `${tree.color}33` : 'rgba(30, 30, 50, 0.6)') : 'rgba(20, 20, 30, 0.4)';
     ctx.fillRect(compact ? 78 : 100, y, compact ? GAME_W - 156 : GAME_W - 200, 45);
 
     // Border
-    ctx.strokeStyle = hasReq ? (maxed ? '#ffd700' : canAfford ? tree.color : '#555') : '#333';
-    ctx.lineWidth = maxed ? 2 : 1;
+    ctx.strokeStyle = selected
+      ? '#fff'
+      : hasReq ? (maxed ? '#ffd700' : canAfford ? tree.color : '#555') : '#333';
+    ctx.lineWidth = selected || maxed ? 2 : 1;
     ctx.strokeRect(compact ? 78 : 100, y, compact ? GAME_W - 156 : GAME_W - 200, 45);
 
     // Talent info
+    if (selected) {
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 18px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('>', compact ? 86 : 92, y + 23);
+    }
     ctx.fillStyle = hasReq ? '#fff' : '#555';
     ctx.font = 'bold 13px monospace';
     ctx.textAlign = 'left';
@@ -5944,25 +6912,49 @@ function renderTalents() {
 
   // Respec button
   const respecY = startY + tree.talents.length * spacing + 20;
-  ctx.fillStyle = respecConfirm ? '#f44336' : '#555';
+  const respecSelected = talentSelection === tree.talents.length;
+  ctx.fillStyle = respecConfirm ? '#f44336' : respecSelected ? '#777' : '#555';
   ctx.fillRect(GAME_W / 2 - 60, respecY, 120, 30);
+  if (respecSelected) {
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(GAME_W / 2 - 60, respecY, 120, 30);
+  }
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 12px monospace';
   ctx.textAlign = 'center';
   ctx.fillText(respecConfirm ? 'Click to confirm' : 'Respec (500 sats)', GAME_W / 2, respecY + 19);
 
   const backRect = getTalentBackRect();
-  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  const backSelected = talentSelection === tree.talents.length + 1;
+  ctx.fillStyle = backSelected ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.08)';
   ctx.fillRect(backRect.x, backRect.y, backRect.w, backRect.h);
-  ctx.strokeStyle = '#666';
+  ctx.strokeStyle = backSelected ? '#fff' : '#666';
+  ctx.lineWidth = backSelected ? 2 : 1;
   ctx.strokeRect(backRect.x, backRect.y, backRect.w, backRect.h);
   ctx.fillStyle = '#fff';
   ctx.fillText('Back', backRect.x + backRect.w / 2, backRect.y + 17);
 
-  // Back hint
+  // Controls hint
   ctx.fillStyle = COLORS.textDim;
   ctx.font = '11px monospace';
-  ctx.fillText(compact ? 'Tap branch/talent | Back button closes' : '←/→ switch branch | Click talent to upgrade | ESC back', GAME_W / 2, GAME_H - 20);
+  if (isGamepadUiPreferred()) {
+    ctx.fillText(
+      compact
+        ? 'D-pad/LS move | A buy/select | ←/→ branch | B back'
+        : 'D-pad or Left Stick: Move | A: Buy / Select | Left / Right: Switch Branch | B: Back',
+      GAME_W / 2,
+      GAME_H - 20
+    );
+  } else {
+    ctx.fillText(
+      compact
+        ? '↑/↓ move | Enter buy/select | ←/→ branch | ESC back'
+        : 'Up / Down: Move | Enter: Buy / Select | Left / Right: Switch Branch | ESC: Back',
+      GAME_W / 2,
+      GAME_H - 20
+    );
+  }
 }
 
 function renderStartScreen() {
@@ -6029,12 +7021,30 @@ function renderStartScreen() {
 
   ctx.fillStyle = COLORS.text;
   ctx.font = layout.compact ? '11px monospace' : '12px monospace';
-  const usingGamepad = gamepadState.connected;
+  const usingGamepad = isGamepadUiPreferred();
   const lines = [
-    usingGamepad ? 'Left Stick - Move' : touchControlsEnabled ? 'Left Stick - Move' : 'WASD / Arrows - Move',
-    usingGamepad ? 'Right Stick - Aim | Triggers Shoot' : touchControlsEnabled ? 'Right Side - Aim + Shoot' : 'Mouse Click - Shoot',
-    `${usingGamepad ? 'X' : touchControlsEnabled ? 'Wake Button' : 'Q'} - Convert enemies`,
-    `${usingGamepad ? 'Y' : touchControlsEnabled ? 'Shop Button' : 'E'} - Open Shop`,
+    usingGamepad ? [
+      makeControllerLabelToken('LS'),
+      makeControllerTextToken(' / ', COLORS.text),
+      makeControllerLabelToken('D-PAD'),
+      makeControllerTextToken(' - Move', COLORS.text)
+    ] : touchControlsEnabled ? 'Left Stick - Move' : 'WASD / Arrows - Move',
+    usingGamepad ? [
+      makeControllerLabelToken('RS'),
+      makeControllerTextToken(' - Aim + Shoot | ', COLORS.text),
+      makeControllerLabelToken('LT'),
+      makeControllerTextToken(' / ', COLORS.text),
+      makeControllerLabelToken('RT'),
+      makeControllerTextToken(' - Alt Shoot', COLORS.text)
+    ] : touchControlsEnabled ? 'Right Side - Aim + Shoot' : 'Mouse Click - Shoot',
+    usingGamepad ? [
+      makeControllerActionToken('convert'),
+      makeControllerTextToken(' - Convert enemies', COLORS.text)
+    ] : `${touchControlsEnabled ? 'Wake Button' : 'Q'} - Convert enemies`,
+    usingGamepad ? [
+      makeControllerActionToken('confirm'),
+      makeControllerTextToken(' - Open Shop nearby', COLORS.text)
+    ] : `${touchControlsEnabled ? 'Shop Button' : 'E'} - Open Shop`,
     '',
     'Collect sats from defeated foes',
     'Buy power-ups at Bitcoin shops',
@@ -6043,7 +7053,17 @@ function renderStartScreen() {
     'Survive the waves. Spread freedom.'
   ];
   lines.forEach((line, i) => {
-    ctx.fillText(line, GAME_W / 2, boxY + 46 + i * (layout.compact ? 15 : 17));
+    const lineY = boxY + 46 + i * (layout.compact ? 15 : 17);
+    if (Array.isArray(line)) {
+      drawInlineControllerPrompt(
+        line,
+        GAME_W / 2,
+        lineY,
+        { align: 'center', font: layout.compact ? '11px monospace' : '12px monospace', textColor: COLORS.text, badgeHeight: layout.compact ? 13 : 15, gap: 3 }
+      );
+    } else {
+      ctx.fillText(line, GAME_W / 2, lineY);
+    }
   });
 
   // Start prompt
@@ -6057,18 +7077,81 @@ function renderStartScreen() {
   ctx.strokeRect(buttonRects.start.x, buttonRects.start.y, buttonRects.start.w, buttonRects.start.h);
   ctx.fillStyle = COLORS.bitcoin;
   ctx.font = 'bold 20px monospace';
-  ctx.fillText(`[ ${touchControlsEnabled ? 'TAP' : 'CLICK'} TO START ]`, GAME_W / 2, layout.startY);
+  const controllerAudioLocked = usingGamepad && hasPendingAudioUnlock();
+  if (usingGamepad && controllerAudioLocked) {
+    ctx.fillText('[ SOUND LOCKED ]', GAME_W / 2, layout.startY);
+  } else if (usingGamepad) {
+    drawInlineControllerPrompt(
+      [
+        makeControllerTextToken('[ ', COLORS.bitcoin),
+        makeControllerActionToken('confirm'),
+        makeControllerTextToken(' / ', COLORS.bitcoin),
+        makeControllerActionToken('pause'),
+        makeControllerTextToken(' TO START ]', COLORS.bitcoin)
+      ],
+      GAME_W / 2,
+      layout.startY,
+      { align: 'center', font: 'bold 20px monospace', textColor: COLORS.bitcoin, badgeHeight: 20, gap: 4 }
+    );
+  } else {
+    ctx.fillText(`[ ${touchControlsEnabled ? 'TAP' : 'CLICK'} TO START ]`, GAME_W / 2, layout.startY);
+  }
   ctx.globalAlpha = 1;
+
+  if (controllerAudioLocked) {
+    const unlockBoxW = layout.compact ? 360 : 400;
+    const unlockBoxH = layout.compact ? 68 : 76;
+    const unlockBoxX = GAME_W / 2 - unlockBoxW / 2;
+    const unlockBoxY = buttonRects.start.y - unlockBoxH - 12;
+    ctx.fillStyle = 'rgba(255, 204, 128, 0.12)';
+    ctx.fillRect(unlockBoxX, unlockBoxY, unlockBoxW, unlockBoxH);
+    ctx.strokeStyle = '#ffcc80';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(unlockBoxX, unlockBoxY, unlockBoxW, unlockBoxH);
+    ctx.fillStyle = '#ffcc80';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText('ONE-TIME AUDIO UNLOCK', GAME_W / 2, unlockBoxY + 20);
+    ctx.font = layout.compact ? '10px monospace' : '11px monospace';
+    ctx.fillText('Chrome needs one real click, tap, or keyboard press for sound.', GAME_W / 2, unlockBoxY + 40);
+    ctx.fillText('Do that once, then keep playing with the Xbox controller.', GAME_W / 2, unlockBoxY + 56);
+  }
 
   // Settings button
   ctx.fillStyle = COLORS.textDim;
   ctx.font = '12px monospace';
-  ctx.fillText(`[ ${touchControlsEnabled ? 'Tap' : 'Click'}: Settings ]`, GAME_W / 2, layout.settingsY);
+  if (usingGamepad) {
+    drawInlineControllerPrompt(
+      [
+        makeControllerTextToken('[ ', COLORS.textDim),
+        makeControllerActionToken('convert'),
+        makeControllerTextToken(': Settings ]', COLORS.textDim)
+      ],
+      GAME_W / 2,
+      layout.settingsY,
+      { align: 'center', font: '12px monospace', textColor: COLORS.textDim, badgeHeight: 15, gap: 4 }
+    );
+  } else {
+    ctx.fillText(`[ ${touchControlsEnabled ? 'Tap' : 'Click'}: Settings ]`, GAME_W / 2, layout.settingsY);
+  }
 
   // Daily challenge button
   ctx.fillStyle = BIOMES[currentBiome].accent;
   ctx.font = 'bold 12px monospace';
-  ctx.fillText(`[ ${touchControlsEnabled ? 'Tap' : 'Click'}: Daily Challenge ]`, GAME_W / 2, layout.dailyY);
+  if (usingGamepad) {
+    drawInlineControllerPrompt(
+      [
+        makeControllerTextToken('[ ', BIOMES[currentBiome].accent),
+        makeControllerActionToken('shop'),
+        makeControllerTextToken(': Daily Challenge ]', BIOMES[currentBiome].accent)
+      ],
+      GAME_W / 2,
+      layout.dailyY,
+      { align: 'center', font: 'bold 12px monospace', textColor: BIOMES[currentBiome].accent, badgeHeight: 15, gap: 4 }
+    );
+  } else {
+    ctx.fillText(`[ ${touchControlsEnabled ? 'Tap' : 'Click'}: Daily Challenge ]`, GAME_W / 2, layout.dailyY);
+  }
 
   // Mute indicator
   if (muted) {
@@ -6096,7 +7179,18 @@ function renderStartScreen() {
   ctx.textAlign = 'left';
   ctx.fillText(`Frames: ${frameCount}`, 10, 20);
 
-  if (touchControlsEnabled) {
+  if (usingGamepad) {
+    const startPromptText = hasPendingAudioUnlock()
+      ? getAudioUnlockPromptText()
+      : controllerFullscreenPromptVisible
+        ? getControllerFullscreenPromptText()
+        : 'Controller mode active';
+    const startPromptHighlighted = hasPendingAudioUnlock() || controllerFullscreenPromptVisible;
+    ctx.fillStyle = startPromptHighlighted ? '#ffcc80' : 'rgba(255,255,255,0.8)';
+    ctx.font = startPromptHighlighted ? '10px monospace' : '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(startPromptText, GAME_W / 2, layout.touchY);
+  } else if (touchControlsEnabled) {
     ctx.fillStyle = 'rgba(255,255,255,0.8)';
     ctx.font = '11px monospace';
     ctx.textAlign = 'center';
@@ -6155,7 +7249,22 @@ function renderGameOver() {
   ctx.globalAlpha = pulse;
   ctx.fillStyle = COLORS.bitcoin;
   ctx.font = 'bold 20px monospace';
-  ctx.fillText(gamepadState.connected ? '[ A / START TO RESTART ]' : '[ CLICK TO RESTART ]', GAME_W / 2, GAME_H / 2 + 150);
+  if (isGamepadUiPreferred()) {
+    drawInlineControllerPrompt(
+      [
+        makeControllerTextToken('[ ', COLORS.bitcoin),
+        makeControllerActionToken('confirm'),
+        makeControllerTextToken(' / ', COLORS.bitcoin),
+        makeControllerActionToken('pause'),
+        makeControllerTextToken(' TO RESTART ]', COLORS.bitcoin)
+      ],
+      GAME_W / 2,
+      GAME_H / 2 + 150,
+      { align: 'center', font: 'bold 20px monospace', textColor: COLORS.bitcoin, badgeHeight: 20, gap: 4 }
+    );
+  } else {
+    ctx.fillText(touchControlsEnabled ? '[ TAP TO RESTART ]' : '[ CLICK TO RESTART ]', GAME_W / 2, GAME_H / 2 + 150);
+  }
   ctx.globalAlpha = 1;
 
   if (mouse.clicked || gamepadState.confirmPressed || gamepadState.pausePressed) {
@@ -6228,10 +7337,90 @@ function renderShopMenu() {
   });
 
   // Footer
-  ctx.fillStyle = COLORS.textDim;
-  ctx.font = '11px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText(touchControlsEnabled ? 'Tap item to buy | Tap bottom to close' : 'W/S navigate | Space select | E close', GAME_W / 2, boxY + boxH - 15);
+  if (isGamepadUiPreferred()) {
+    drawInlineControllerPrompt(
+      [
+        makeControllerLabelToken('LS'),
+        makeControllerTextToken(' / ', COLORS.textDim),
+        makeControllerLabelToken('D-PAD'),
+        makeControllerTextToken(' move | ', COLORS.textDim),
+        makeControllerActionToken('confirm'),
+        makeControllerTextToken(' buy | ', COLORS.textDim),
+        makeControllerActionToken('back'),
+        makeControllerTextToken(' / ', COLORS.textDim),
+        makeControllerActionToken('pause'),
+        makeControllerTextToken(' close', COLORS.textDim)
+      ],
+      GAME_W / 2,
+      boxY + boxH - 15,
+      { align: 'center', font: '11px monospace', textColor: COLORS.textDim, badgeHeight: 14, gap: 3 }
+    );
+  } else {
+    ctx.fillStyle = COLORS.textDim;
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(
+      touchControlsEnabled ? 'Tap item to buy | Tap bottom to close' : 'W/S navigate | Space select | E close',
+      GAME_W / 2,
+      boxY + boxH - 15
+    );
+  }
+}
+
+function cancelControllerRemapping() {
+  controllerRemappingAction = null;
+  controllerRemapReady = false;
+}
+
+function activateControllerSettingsItem(item) {
+  if (item.type === 'toggle') {
+    controllerVibrationEnabled = !controllerVibrationEnabled;
+    saveSettings();
+    return;
+  }
+  if (item.type === 'slider') {
+    controllerVibrationIntensity += 0.1;
+    if (controllerVibrationIntensity > 1) controllerVibrationIntensity = 0.2;
+    controllerVibrationIntensity = Math.round(controllerVibrationIntensity * 100) / 100;
+    saveSettings();
+    return;
+  }
+  if (item.type === 'binding') {
+    controllerRemappingAction = item.action;
+    controllerRemapReady = false;
+    return;
+  }
+  if (item.key === 'testRumble') {
+    rumbleGamepad(0.7, 0.45, 180);
+    return;
+  }
+  if (item.key === 'resetController') {
+    resetControllerBindingsToDefault();
+    return;
+  }
+  if (item.key === 'back') {
+    cancelControllerRemapping();
+    controllerSettingsOpen = false;
+    settingsOpen = true;
+  }
+}
+
+function handleControllerRemapping() {
+  if (!controllerSettingsOpen || !controllerRemappingAction) return;
+  const gamepad = getActiveGamepad();
+  if (!gamepad) return;
+
+  const pressedButton = getFirstPressedGamepadButton(gamepad);
+  if (!controllerRemapReady) {
+    if (pressedButton === null) controllerRemapReady = true;
+    return;
+  }
+  if (pressedButton === null) return;
+
+  assignControllerBinding(controllerRemappingAction, pressedButton);
+  cancelControllerRemapping();
+  saveSettings();
+  playSound('pickup');
 }
 
 // ============================================================
@@ -6246,21 +7435,38 @@ function gameLoop(timestamp) {
   const dt = Math.min(timestamp - lastTime, 50); // cap delta to avoid spiral
   lastTime = timestamp;
   pollGamepadInput();
+  handleControllerRemapping();
 
-  if (gameState === 'start' && !talentsOpen && !keybindsOpen && !settingsOpen) {
+  if (gameState === 'start' && !talentsOpen && !keybindsOpen && !controllerSettingsOpen && !settingsOpen) {
     if (gamepadState.settingsPressed) {
-      settingsOpen = true;
-      settingsSelection = 0;
+      if (blockStartScreenGamepadActionUntilAudioUnlock('settings')) {
+        settingsOpen = false;
+      } else {
+        requestAudioResume('gamepad');
+        tryEnterFullscreen('gamepad');
+        settingsOpen = true;
+        settingsSelection = 0;
+      }
     } else if (gamepadState.dailyPressed) {
-      dailyMode = false;
-      startDailyChallenge();
+      if (blockStartScreenGamepadActionUntilAudioUnlock('daily')) {
+        dailyMode = false;
+      } else {
+        requestAudioResume('gamepad');
+        tryEnterFullscreen('gamepad');
+        dailyMode = false;
+        startDailyChallenge();
+      }
     } else if (gamepadState.confirmPressed || gamepadState.pausePressed) {
-      try { initGame(); } catch (e) { console.error(e); }
+      if (!blockStartScreenGamepadActionUntilAudioUnlock('start')) {
+        requestAudioResume('gamepad');
+        tryEnterFullscreen('gamepad');
+        try { initGame(); } catch (e) { console.error(e); }
+      }
     }
   }
 
   // Handle start screen clicks in game loop (single point of truth)
-  if (gameState === 'start' && mouse.clicked && !talentsOpen && !keybindsOpen && !settingsOpen) {
+  if (gameState === 'start' && mouse.clicked && !talentsOpen && !keybindsOpen && !controllerSettingsOpen && !settingsOpen) {
     const point = { x: mouse.x, y: mouse.y };
     const buttons = getStartScreenButtonRects();
     if (pointInRect(point, buttons.settings)) {
@@ -6277,7 +7483,7 @@ function gameLoop(timestamp) {
   }
 
   // Settings toggle (keyboard fallback)
-  if (gameState === 'start' && keys['p']) {
+  if (gameState === 'start' && !controllerSettingsOpen && keys['p']) {
     settingsOpen = !settingsOpen;
     settingsSelection = 0;
     keys['p'] = false;
@@ -6322,6 +7528,13 @@ function gameLoop(timestamp) {
           resetTouchAim();
         }
         saveSettings();
+      } else if (item.key === 'controller') {
+        if (gameState === 'start') {
+          settingsOpen = false;
+          controllerSettingsOpen = true;
+          controllerSelection = 0;
+          cancelControllerRemapping();
+        }
       } else if (item.key === 'skin') {
         const skinKeys = Object.keys(SKINS);
         let idx = skinKeys.indexOf(currentSkin);
@@ -6337,6 +7550,7 @@ function gameLoop(timestamp) {
         settingsOpen = false;
         talentsOpen = true;
         talentsBranch = 0;
+        talentSelection = 0;
         respecConfirm = false;
       } else if (item.key === 'reducedMotion') {
         reducedMotion = !reducedMotion;
@@ -6369,6 +7583,49 @@ function gameLoop(timestamp) {
       mouse.down = false;
     }
     if (keys['escape'] || gamepadState.backPressed) { settingsOpen = false; keys['escape'] = false; }
+  }
+
+  if (controllerSettingsOpen && gameState === 'start') {
+    if (!controllerRemappingAction) {
+      if (keys['w'] || keys['arrowup'] || gamepadState.menuUpPressed) {
+        controllerSelection = (controllerSelection - 1 + CONTROLLER_SETTINGS_ITEMS.length) % CONTROLLER_SETTINGS_ITEMS.length;
+        keys['w'] = false;
+        keys['arrowup'] = false;
+      }
+      if (keys['s'] || keys['arrowdown'] || gamepadState.menuDownPressed) {
+        controllerSelection = (controllerSelection + 1) % CONTROLLER_SETTINGS_ITEMS.length;
+        keys['s'] = false;
+        keys['arrowdown'] = false;
+      }
+      if (keys[' '] || keys['enter'] || gamepadState.confirmPressed) {
+        activateControllerSettingsItem(CONTROLLER_SETTINGS_ITEMS[controllerSelection]);
+        keys[' '] = false;
+        keys['enter'] = false;
+      }
+    }
+    if (mouse.clicked) {
+      const layout = getControllerLayout();
+      if (mouse.x >= layout.boxX + 10 && mouse.x <= layout.boxX + layout.boxW - 10) {
+        for (let i = 0; i < CONTROLLER_SETTINGS_ITEMS.length; i++) {
+          const iy = layout.boxY + 96 + i * layout.rowH;
+          if (mouse.y >= iy - 16 && mouse.y <= iy + 16) {
+            controllerSelection = i;
+            activateControllerSettingsItem(CONTROLLER_SETTINGS_ITEMS[i]);
+            break;
+          }
+        }
+      }
+      mouse.clicked = false;
+      mouse.down = false;
+    }
+    if (keys['escape']) {
+      if (controllerRemappingAction) cancelControllerRemapping();
+      else {
+        controllerSettingsOpen = false;
+        settingsOpen = true;
+      }
+      keys['escape'] = false;
+    }
   }
 
   // Keybinds editor
@@ -6436,6 +7693,12 @@ function gameLoop(timestamp) {
       keys[keybinds.shop] = false;
     }
 
+    if (gamepadState.confirmPressed) {
+      paused = false;
+      requestAnimationFrame(gameLoop);
+      return;
+    }
+
     render();
     renderPauseMenu();
     requestAnimationFrame(gameLoop);
@@ -6460,26 +7723,106 @@ function gameLoop(timestamp) {
   // Settings overlay
   // Settings / Keybinds / Talents overlay
   if (talentsOpen) {
-    renderTalents();
     // Talent tree input
     const { branches, branchW, branchY, startY, spacing, compact } = getTalentsLayout();
-    if (keys['a'] || keys['arrowleft'] || gamepadState.menuLeftPressed) { talentsBranch = (talentsBranch - 1 + branches.length) % branches.length; keys['a'] = false; keys['arrowleft'] = false; }
-    if (keys['d'] || keys['arrowright'] || gamepadState.menuRightPressed) { talentsBranch = (talentsBranch + 1) % branches.length; keys['d'] = false; keys['arrowright'] = false; }
-    if (keys['escape'] || gamepadState.backPressed) { talentsOpen = false; respecConfirm = false; keys['escape'] = false; }
+    const padUpDown = gamepadState.dpadY < -0.5 || gamepadState.moveY < -GAMEPAD_MENU_STICK_THRESHOLD;
+    const padDownDown = gamepadState.dpadY > 0.5 || gamepadState.moveY > GAMEPAD_MENU_STICK_THRESHOLD;
+    const padLeftDown = gamepadState.dpadX < -0.5 || gamepadState.moveX < -GAMEPAD_MENU_STICK_THRESHOLD;
+    const padRightDown = gamepadState.dpadX > 0.5 || gamepadState.moveX > GAMEPAD_MENU_STICK_THRESHOLD;
+    const talentPadUpPressed = padUpDown && !talentTreePadHeld.up;
+    const talentPadDownPressed = padDownDown && !talentTreePadHeld.down;
+    const talentPadLeftPressed = padLeftDown && !talentTreePadHeld.left;
+    const talentPadRightPressed = padRightDown && !talentTreePadHeld.right;
+    talentTreePadHeld.up = padUpDown;
+    talentTreePadHeld.down = padDownDown;
+    talentTreePadHeld.left = padLeftDown;
+    talentTreePadHeld.right = padRightDown;
+    let tree = TALENT_TREE[branches[talentsBranch]];
+    let maxTalentSelection = tree.talents.length + 1;
+    if (keys['a'] || keys['arrowleft'] || gamepadState.menuLeftPressed || talentPadLeftPressed) {
+      talentsBranch = (talentsBranch - 1 + branches.length) % branches.length;
+      tree = TALENT_TREE[branches[talentsBranch]];
+      maxTalentSelection = tree.talents.length + 1;
+      talentSelection = Math.min(talentSelection, maxTalentSelection);
+      respecConfirm = false;
+      keys['a'] = false;
+      keys['arrowleft'] = false;
+    }
+    if (keys['d'] || keys['arrowright'] || gamepadState.menuRightPressed || talentPadRightPressed) {
+      talentsBranch = (talentsBranch + 1) % branches.length;
+      tree = TALENT_TREE[branches[talentsBranch]];
+      maxTalentSelection = tree.talents.length + 1;
+      talentSelection = Math.min(talentSelection, maxTalentSelection);
+      respecConfirm = false;
+      keys['d'] = false;
+      keys['arrowright'] = false;
+    }
+    if (keys['w'] || keys['arrowup'] || gamepadState.menuUpPressed || talentPadUpPressed) {
+      talentSelection = (talentSelection - 1 + maxTalentSelection + 1) % (maxTalentSelection + 1);
+      respecConfirm = false;
+      keys['w'] = false;
+      keys['arrowup'] = false;
+    }
+    if (keys['s'] || keys['arrowdown'] || gamepadState.menuDownPressed || talentPadDownPressed) {
+      talentSelection = (talentSelection + 1) % (maxTalentSelection + 1);
+      respecConfirm = false;
+      keys['s'] = false;
+      keys['arrowdown'] = false;
+    }
+    if (keys['escape'] || gamepadState.backPressed) {
+      talentsOpen = false;
+      respecConfirm = false;
+      keys['escape'] = false;
+    }
+    if (keys[' '] || keys['enter'] || gamepadState.confirmPressed) {
+      if (talentSelection < tree.talents.length) {
+        const result = allocateTalent(branches[talentsBranch], talentSelection);
+        const t = tree.talents[talentSelection];
+        const rank = getTalentRank(t.id);
+        if (!result) {
+          if (t.requires && getTalentRank(t.requires) === 0) {
+            waveAnnounceText = `🔒 Requires: ${t.requires}`;
+          } else if (rank >= t.maxRank) {
+            waveAnnounceText = '⚡ Already maxed!';
+          } else {
+            waveAnnounceText = `★ Need ${t.cost} talent point${t.cost>1?'s':''}!`;
+          }
+          waveAnnounceTimer = 1500;
+        }
+      } else if (talentSelection === tree.talents.length) {
+        if (respecConfirm) {
+          if (player.sats >= 500) {
+            player.sats -= 500;
+            respecTalents();
+            respecConfirm = false;
+          }
+        } else {
+          respecConfirm = true;
+        }
+      } else {
+        talentsOpen = false;
+        respecConfirm = false;
+      }
+      keys[' '] = false;
+      keys['enter'] = false;
+    }
+    renderTalents();
     
     // Click handling for talents
     if (mouse.clicked) {
       const mx = mouse.x, my = mouse.y;
-      const tree = TALENT_TREE[branches[talentsBranch]];
+      tree = TALENT_TREE[branches[talentsBranch]];
       const backRect = getTalentBackRect();
       const branchStartX = GAME_W / 2 - (branches.length * branchW) / 2;
       
       // Check respec button
       const respecY = startY + tree.talents.length * spacing + 20;
       if (pointInRect({ x: mx, y: my }, backRect)) {
+        talentSelection = tree.talents.length + 1;
         talentsOpen = false;
         respecConfirm = false;
       } else if (mx > GAME_W / 2 - 60 && mx < GAME_W / 2 + 60 && my > respecY && my < respecY + 30) {
+        talentSelection = tree.talents.length;
         if (respecConfirm) {
           if (player.sats >= 500) {
             player.sats -= 500;
@@ -6495,6 +7838,8 @@ function gameLoop(timestamp) {
           const x = branchStartX + i * branchW;
           if (mx >= x + 5 && mx <= x + branchW - 5 && my >= branchY && my <= branchY + 30) {
             talentsBranch = i;
+            tree = TALENT_TREE[branches[talentsBranch]];
+            talentSelection = Math.min(talentSelection, tree.talents.length + 1);
             respecConfirm = false;
             branchChanged = true;
             break;
@@ -6510,6 +7855,7 @@ function gameLoop(timestamp) {
           for (let i = 0; i < tree.talents.length; i++) {
             const y = startY + i * spacing;
             if (my > y && my < y + 45 && mx > talentLeft && mx < talentRight) {
+              talentSelection = i;
               const result = allocateTalent(branches[talentsBranch], i);
               const t = tree.talents[i];
               const rank = getTalentRank(t.id);
@@ -6533,8 +7879,17 @@ function gameLoop(timestamp) {
     }
   } else if (keybindsOpen) {
     renderKeybinds();
+  } else if (controllerSettingsOpen) {
+    renderControllerSettings();
   } else if (settingsOpen) {
     renderSettings();
+  }
+
+  if (!talentsOpen) {
+    talentTreePadHeld.up = false;
+    talentTreePadHeld.down = false;
+    talentTreePadHeld.left = false;
+    talentTreePadHeld.right = false;
   }
 
   requestAnimationFrame(gameLoop);

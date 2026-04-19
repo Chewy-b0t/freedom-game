@@ -1,4 +1,4 @@
-const CACHE_NAME = 'freedom-fighters-v0-1-9-pwa-3';
+const CACHE_NAME = 'freedom-fighters-v0-1-10-pwa-3';
 const CORE_ASSETS = [
   '../../',
   '../../index.html',
