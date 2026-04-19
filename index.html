@@ -1492,7 +1492,6 @@ function updateGamepadButtonState(name, isDown, onPress) {
 window.addEventListener('gamepadconnected', event => {
   const pad = event.gamepad;
   if (!pad) return;
-  requestAudioResume('keyboard');
   gamepadState.connected = true;
   gamepadState.index = pad.index;
   gamepadState.name = pad.id || 'Gamepad';
@@ -1541,14 +1540,6 @@ function pollGamepadInput() {
   }
   gamepadState.buttonDown.shoot = shootHeld;
   gamepadState.shootDown = shootHeld;
-
-  // Right stick also triggers shooting when pushed past threshold
-  const rightStickPush = rawAimX * rawAimX + rawAimY * rawAimY > 0.25;
-  if (rightStickPush && !gamepadState.buttonDown.rightStickShoot) {
-    gamepadState.shootClicked = true;
-  }
-  gamepadState.buttonDown.rightStickShoot = rightStickPush;
-  gamepadState.shootDown = shootHeld || rightStickPush;
   updateGamepadButtonState('confirm', isGamepadActionDown(pad, 'confirm'), () => { gamepadState.confirmPressed = true; });
   updateGamepadButtonState('back', isGamepadActionDown(pad, 'back'), () => { gamepadState.backPressed = true; });
   updateGamepadButtonState('settings', isGamepadActionDown(pad, 'convert'), () => { gamepadState.settingsPressed = true; });
@@ -7022,14 +7013,20 @@ function renderStartScreen() {
   ctx.fillStyle = COLORS.text;
   ctx.font = layout.compact ? '11px monospace' : '12px monospace';
   const usingGamepad = isGamepadUiPreferred();
+  const controllerConnectedNeedsUnlock =
+    gamepadState.connected &&
+    !muted &&
+    (!audioCtx || audioCtx.state !== 'running') &&
+    !hasStickyUserActivation();
+  const showControllerStartupUi = usingGamepad || controllerConnectedNeedsUnlock;
   const lines = [
-    usingGamepad ? [
+    showControllerStartupUi ? [
       makeControllerLabelToken('LS'),
       makeControllerTextToken(' / ', COLORS.text),
       makeControllerLabelToken('D-PAD'),
       makeControllerTextToken(' - Move', COLORS.text)
     ] : touchControlsEnabled ? 'Left Stick - Move' : 'WASD / Arrows - Move',
-    usingGamepad ? [
+    showControllerStartupUi ? [
       makeControllerLabelToken('RS'),
       makeControllerTextToken(' - Aim + Shoot | ', COLORS.text),
       makeControllerLabelToken('LT'),
@@ -7037,11 +7034,11 @@ function renderStartScreen() {
       makeControllerLabelToken('RT'),
       makeControllerTextToken(' - Alt Shoot', COLORS.text)
     ] : touchControlsEnabled ? 'Right Side - Aim + Shoot' : 'Mouse Click - Shoot',
-    usingGamepad ? [
+    showControllerStartupUi ? [
       makeControllerActionToken('convert'),
       makeControllerTextToken(' - Convert enemies', COLORS.text)
     ] : `${touchControlsEnabled ? 'Wake Button' : 'Q'} - Convert enemies`,
-    usingGamepad ? [
+    showControllerStartupUi ? [
       makeControllerActionToken('confirm'),
       makeControllerTextToken(' - Open Shop nearby', COLORS.text)
     ] : `${touchControlsEnabled ? 'Shop Button' : 'E'} - Open Shop`,
@@ -7077,10 +7074,10 @@ function renderStartScreen() {
   ctx.strokeRect(buttonRects.start.x, buttonRects.start.y, buttonRects.start.w, buttonRects.start.h);
   ctx.fillStyle = COLORS.bitcoin;
   ctx.font = 'bold 20px monospace';
-  const controllerAudioLocked = usingGamepad && hasPendingAudioUnlock();
-  if (usingGamepad && controllerAudioLocked) {
-    ctx.fillText('[ SOUND LOCKED ]', GAME_W / 2, layout.startY);
-  } else if (usingGamepad) {
+  const controllerAudioLocked = showControllerStartupUi && (controllerConnectedNeedsUnlock || hasPendingAudioUnlock());
+  if (showControllerStartupUi && controllerAudioLocked) {
+    ctx.fillText('[ PLAY WITH CONTROLLER ]', GAME_W / 2, layout.startY);
+  } else if (showControllerStartupUi) {
     drawInlineControllerPrompt(
       [
         makeControllerTextToken('[ ', COLORS.bitcoin),
@@ -7100,7 +7097,7 @@ function renderStartScreen() {
 
   if (controllerAudioLocked) {
     const unlockBoxW = layout.compact ? 360 : 400;
-    const unlockBoxH = layout.compact ? 68 : 76;
+    const unlockBoxH = layout.compact ? 84 : 92;
     const unlockBoxX = GAME_W / 2 - unlockBoxW / 2;
     const unlockBoxY = buttonRects.start.y - unlockBoxH - 12;
     ctx.fillStyle = 'rgba(255, 204, 128, 0.12)';
@@ -7111,16 +7108,17 @@ function renderStartScreen() {
     ctx.fillStyle = '#ffcc80';
     ctx.textAlign = 'center';
     ctx.font = 'bold 14px monospace';
-    ctx.fillText('ONE-TIME AUDIO UNLOCK', GAME_W / 2, unlockBoxY + 20);
+    ctx.fillText('XBOX CONTROLLER DETECTED', GAME_W / 2, unlockBoxY + 20);
     ctx.font = layout.compact ? '10px monospace' : '11px monospace';
-    ctx.fillText('Chrome needs one real click, tap, or keyboard press for sound.', GAME_W / 2, unlockBoxY + 40);
-    ctx.fillText('Do that once, then keep playing with the Xbox controller.', GAME_W / 2, unlockBoxY + 56);
+    ctx.fillText('CLICK HERE ONCE OR PRESS ANY KEY TO ENABLE SOUND', GAME_W / 2, unlockBoxY + 42);
+    ctx.fillText('After that, keep playing with the Xbox controller.', GAME_W / 2, unlockBoxY + 60);
+    ctx.fillText('Your controller start action will continue automatically.', GAME_W / 2, unlockBoxY + 76);
   }
 
   // Settings button
   ctx.fillStyle = COLORS.textDim;
   ctx.font = '12px monospace';
-  if (usingGamepad) {
+  if (showControllerStartupUi) {
     drawInlineControllerPrompt(
       [
         makeControllerTextToken('[ ', COLORS.textDim),
@@ -7138,7 +7136,7 @@ function renderStartScreen() {
   // Daily challenge button
   ctx.fillStyle = BIOMES[currentBiome].accent;
   ctx.font = 'bold 12px monospace';
-  if (usingGamepad) {
+  if (showControllerStartupUi) {
     drawInlineControllerPrompt(
       [
         makeControllerTextToken('[ ', BIOMES[currentBiome].accent),
@@ -7179,13 +7177,13 @@ function renderStartScreen() {
   ctx.textAlign = 'left';
   ctx.fillText(`Frames: ${frameCount}`, 10, 20);
 
-  if (usingGamepad) {
-    const startPromptText = hasPendingAudioUnlock()
-      ? getAudioUnlockPromptText()
+  if (showControllerStartupUi) {
+    const startPromptText = controllerAudioLocked
+      ? 'Click once or press any key, then use controller normally'
       : controllerFullscreenPromptVisible
         ? getControllerFullscreenPromptText()
         : 'Controller mode active';
-    const startPromptHighlighted = hasPendingAudioUnlock() || controllerFullscreenPromptVisible;
+    const startPromptHighlighted = controllerAudioLocked || controllerFullscreenPromptVisible;
     ctx.fillStyle = startPromptHighlighted ? '#ffcc80' : 'rgba(255,255,255,0.8)';
     ctx.font = startPromptHighlighted ? '10px monospace' : '11px monospace';
     ctx.textAlign = 'center';
