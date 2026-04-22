@@ -3154,22 +3154,25 @@ const BOSS_ATTACK_META = {
   fraudDecoy: { label: 'Fraud Decoys', color: '#7e57c2', pattern: 'blink' }
 };
 
+const BOSS_ROTATION = [
+  'federalReserve',
+  'militaryComplex',
+  'shadowCabinet',
+  'mediaMachine',
+  'techOligarch',
+  'theSystem'
+];
+
+function getBossKeyForWave(wave) {
+  // Wave 5 => index 0, Wave 10 => index 1, ... Wave 30 => index 5,
+  // Wave 35 => index 0 again (clean loop for endless mode).
+  const cycleIndex = Math.max(0, Math.floor(wave / 5) - 1);
+  return BOSS_ROTATION[cycleIndex % BOSS_ROTATION.length];
+}
+
 class Boss {
   constructor(wave) {
-    // Determine boss type based on wave
-    let bossKey;
-    if (wave === 5) bossKey = 'federalReserve';
-    else if (wave === 10) bossKey = 'militaryComplex';
-    else if (wave === 15) bossKey = 'shadowCabinet';
-    else if (wave === 20) bossKey = 'mediaMachine';
-    else if (wave === 25) bossKey = 'techOligarch';
-    else if (wave === 30) bossKey = 'theSystem';
-    else {
-      // Cycle through types for later waves
-      const types = Object.keys(BOSS_TYPES);
-      bossKey = types[Math.floor(wave / 5) % types.length];
-    }
-
+    const bossKey = getBossKeyForWave(wave);
     const type = BOSS_TYPES[bossKey];
     this.type = bossKey;
     this.x = GAME_W / 2;

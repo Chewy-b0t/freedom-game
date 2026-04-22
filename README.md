@@ -171,6 +171,59 @@ The start screen now includes a `v0.2.0` Meta Hub. Open it by clicking the level
 
 ---
 
+## 👾 Monsters (Enemy Roster)
+
+### Standard Enemies
+
+| Enemy | Shape | Color | Behavior |
+|------|------|------|----------|
+| **Propaganda** | ◆ Diamond | Orange | Slow shooter, prefers range |
+| **Contractor** | ■ Square | Dark orange | Mid-speed, balanced ranged attacker |
+| **Banker** | ⬡ Hexagon | Red | Fast, tankier, aggressive pressure |
+| **Sniper** | ▲ Triangle | Purple | Strafes and holds long range, high hit damage |
+| **Rusher** | ● Circle | Pink | Melee diver, closes distance quickly |
+| **Tank** | ⬢ Octagon | Blue-grey | Slow, very high HP, heavy hits |
+
+### Advanced / Late-Wave Enemies
+
+| Enemy | Shape | Color | Behavior |
+|------|------|------|----------|
+| **Fraud** | ▼ Inverted triangle | Purple | Mirrors player positioning and angles |
+| **Corruption** | ★ Spinning star | Gold | High HP aura unit with regen pressure |
+| **Taxes** | ◼ Cut-corner square | Grey | Chips sats from player on contact/hits |
+| **Abuse** | Jagged polygon | Blood red | High-tempo dash pressure and burst |
+| **Censorship** | █ Rectangle | Black | Area denial/silence-style pressure unit |
+
+### Elite & Miniboss Variants
+
+- **Elites** can spawn with one modifier:
+  - **Shielded** (extra shield HP)
+  - **Explosive** (AoE on death)
+  - **Teleport** (reposition near player)
+- **Minibosses** appear on many non-boss cycles (every 3 waves, excluding boss waves, from wave 6+):
+  - Much higher HP/damage/size
+  - Shielded + explosive by default
+  - Immune to conversion
+
+---
+
+## 🏆 Bosses (Every 5 Waves)
+
+Bosses have unique movement + attack kits and **enrage at 50% HP**.
+
+| Boss | First Wave | Shape | Signature Attacks |
+|------|------------|-------|-------------------|
+| **The Federal Reserve** | 5 | Octagon | Spiral Burst, Money Rain, Focused Beam |
+| **The Military Industrial Complex** | 10 | Diamond | Spiral Burst, Circle Burst, Homing Missiles |
+| **The Shadow Cabinet** | 15 | Hexagon | Teleport Burst, Money Rain, Focused Beam |
+| **The Media Propaganda Machine** | 20 | Square | Spiral Burst, Fake News, Focused Beam |
+| **The Tech Oligarch** | 25 | Circle | Homing Missiles, Teleport Burst, Laser Grid |
+| **The System** | 30 | Hexagon | Taxation, Corruption Aura, Fraud Decoys |
+
+After wave 30, boss archetypes continue cycling on future boss waves.
+
+---
+
 ## 🏗️ Architecture
 
 ```
