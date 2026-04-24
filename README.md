@@ -358,7 +358,7 @@ Feel free to [open an issue](https://github.com/Chewy-b0t/freedom-game/issues) o
 
 **Built with nothing but HTML, CSS, and JavaScript. No excuses.**
 
-Made with ❤️ by [Chewy-b0t](https://github.com/Chewy-b0t)
+Created with AI by [Chewy-b0t](https://github.com/Chewy-b0t)
 
 ⭐ **Star this repo if you enjoyed the game!** ⭐
 
